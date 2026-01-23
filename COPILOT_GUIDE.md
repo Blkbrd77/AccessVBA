@@ -119,9 +119,77 @@ I'll give you specific tasks one at a time. Please provide VBA code for Access.
 
 ---
 
-### Step 2: Feed Tasks One at a Time
+### Step 2: Fix Known Issues First
 
-After pasting the context, give Copilot these tasks in order:
+Before implementing new features, fix this known bug:
+
+---
+
+## Known Issues (Fix First)
+
+### Issue: "Enter Parameter Value" for BatchID
+
+**Symptom:** After committing a batch and returning to frmOrderList, Access shows "Enter Parameter Value" dialog asking for BatchID.
+
+**Cause:** The frmOrderList query doesn't include BatchID field, so when the code tries to filter by BatchID, Access can't find it.
+
+**Copilot Prompt (copy and paste):**
+
+```
+I have a bug in my Access application. When I commit a batch of orders and return to frmOrderList, I get an "Enter Parameter Value" dialog asking for BatchID.
+
+THE PROBLEM:
+The frmOrderList form's RecordSource is a query that doesn't include BatchID. When my code tries to filter by BatchID, Access can't find it and prompts for a parameter.
+
+CURRENT QUERY (frmOrderList):
+SELECT S.SOID, S.OrderNumber, S.CustomerName, S.PONumber, S.DateReceived, F.QualifierCode, F.SequenceNo, S.BaseToken, S.SystemLetter, S.BackorderNo
+FROM SalesOrders AS S LEFT JOIN qryFirstQualifierPerSO AS F ON S.SOID = F.SOID
+WHERE S.ActiveFlag = True
+ORDER BY S.SOID DESC;
+
+THE CODE THAT SETS THE FILTER (in cmdCommit_Click):
+If CurrentProject.AllForms("frmOrderList").IsLoaded Then
+    Forms("frmOrderList").Filter = "BatchID='" & Replace(batchID, "'", "''") & "'"
+    Forms("frmOrderList").FilterOn = True
+    Forms("frmOrderList").Requery
+Else
+    DoCmd.OpenForm "frmOrderList", , , "BatchID='" & Replace(batchID, "'", "''") & "'"
+End If
+
+WHAT I NEED:
+1. The corrected SQL for the frmOrderList query that includes S.BatchID
+2. Confirm the filter syntax is correct
+
+The SalesOrders table does have a BatchID field (Text 36 characters).
+```
+
+**The Fix:**
+
+Update the `frmOrderList` query to include `S.BatchID`:
+
+```sql
+SELECT S.SOID, S.OrderNumber, S.CustomerName, S.PONumber, S.DateReceived,
+       F.QualifierCode, F.SequenceNo, S.BaseToken, S.SystemLetter,
+       S.BackorderNo, S.BatchID
+FROM SalesOrders AS S
+LEFT JOIN qryFirstQualifierPerSO AS F ON S.SOID = F.SOID
+WHERE S.ActiveFlag = True
+ORDER BY S.SOID DESC;
+```
+
+**How to Apply:**
+1. Open the Navigation Pane in Access
+2. Find the query named `frmOrderList`
+3. Open it in Design View (or SQL View)
+4. Add `S.BatchID` to the SELECT clause
+5. Save and close the query
+6. Test by committing a batch
+
+---
+
+### Step 3: Feed Tasks One at a Time
+
+After fixing known issues and pasting the context, give Copilot these tasks in order:
 
 ---
 
