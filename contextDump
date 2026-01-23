@@ -1,0 +1,646 @@
+
+Option Compare Database
+Option Explicit
+
+' ============================================================
+' Access Context Package — Single Output File
+' - Late-bound (no extra references)
+' - Exports Environment + Tables/Indexes/Relationships/Counts
+' - Inlines SaveAsText text for selected Forms (and Reports)
+' - Optionally inlines all code modules (requires Trust Center "VBA project access")
+' - Optionally inlines all Queries' SQL
+'
+' Entry point:
+'   Call DumpEnvironment_AllInOne
+' ============================================================
+
+Public Sub DumpEnvironment_AllInOne( _
+    Optional ByVal IncludeReports As Boolean = False, _
+    Optional ByVal IncludeCodeModules As Boolean = True, _
+    Optional ByVal IncludeQueries As Boolean = True)
+
+    On Error GoTo ErrHandler
+
+    Dim destFolder As String
+    destFolder = "C:\Users\JaySamples\OneDrive - HOSE-MCCANN COMMUNICATIONS\Documents\Access Databases\Q-1019\TravelLapDocs"
+
+    ' --- Configure which objects to inline ---
+    Dim formsToExport As Variant
+    formsToExport = Array("frmOrderList", "frmSalesOrderEntry", "dlgAddQualifiers")
+
+    Dim reportsToExport As Variant
+    reportsToExport = Array()   ' e.g., Array("rptSomething"); leave empty if none
+
+    ' --- Build report in memory ---
+    Dim report As String, ts As String, outFile As String
+    ts = Format(Now, "yyyy-mm-dd_hhnnss")
+    outFile = BuildSafePath(destFolder, "Access_Context_Package_" & ts & ".txt")
+
+    report = ""
+    report = report & "=== VBE ACCESS TEST ===" & vbCrLf & _
+         "VBE access: " & IIf(IsVbeAccessible(), "ENABLED", "DISABLED") & vbCrLf & vbCrLf
+    report = report & TitleBlock("ENVIRONMENT DUMP (Microsoft Access)") & vbCrLf
+    report = report & Section_EnvironmentInfo()
+    report = report & Section_SplitAndBackends()
+    report = report & Section_RowCounts()
+    report = report & Section_TableIndexes()
+    report = report & Section_Relationships()
+
+    If IncludeQueries Then
+        report = report & Section_QueriesSQL()
+    End If
+
+    ' --- Inline SaveAsText for FORMS ---
+    report = report & Section_Header("FORMS — SaveAsText (inlined)")
+    report = report & Forms_SaveAsText_Inline(formsToExport)
+
+    ' --- Inline SaveAsText for REPORTS (optional) ---
+    If IncludeReports Then
+        report = report & Section_Header("REPORTS — SaveAsText (inlined)")
+        report = report & Reports_SaveAsText_Inline(reportsToExport)
+    End If
+
+
+    ' --- Inline code modules (optional; requires VBE access) ---
+    If IncludeCodeModules Then
+        If IsVbeAccessible() Then
+            report = report & Section_Header("CODE MODULES (inlined)")
+            report = report & Modules_Inline_All()
+        Else
+            report = report & Section_Header("CODE MODULES (skipped)")
+            report = report & "Skipped: VBE access is disabled. Open from a Trusted Location or enable AccessVBOM policy." & vbCrLf & vbCrLf
+        End If
+    Else
+        report = report & Section_Header("CODE MODULES (skipped)")
+        report = report & "Skipped at caller request. Set IncludeCodeModules:=True to include modules." & vbCrLf & vbCrLf
+    End If
+
+    ' --- Write output file ---
+    EnsureFolderRecursive destFolder
+    WriteTextFile outFile, report
+
+    MsgBox "Context package created:" & vbCrLf & outFile, vbInformation
+    Exit Sub
+
+ErrHandler:
+    MsgBox "DumpEnvironment_AllInOne failed: " & Err.Number & " - " & Err.Description, vbCritical
+End Sub
+
+' ============================================================
+' Section builders
+' ============================================================
+
+Private Function TitleBlock(ByVal title As String) As String
+    TitleBlock = "=== " & title & " ===" & vbCrLf & Now & vbCrLf & String(60, "=") & vbCrLf & vbCrLf
+End Function
+
+Private Function Section_Header(ByVal caption As String) As String
+    Section_Header = vbCrLf & String(78, "=") & vbCrLf & caption & vbCrLf & String(78, "=") & vbCrLf & vbCrLf
+End Function
+
+Private Function Section_EnvironmentInfo() As String
+    Dim s As String
+    s = "=== ENVIRONMENT ===" & vbCrLf & _
+        "Microsoft Access: " & GetAccessVersion() & " (" & GetOfficeBitness() & ")" & vbCrLf & _
+        "Windows: " & GetWindowsInfo() & vbCrLf & _
+        "CurrentProject.Name: " & Nz(CurrentProject.name, "") & vbCrLf & _
+        "CurrentProject.Path: " & Nz(CurrentProject.path, "") & vbCrLf & _
+        "File: " & CurrentDb.name & vbCrLf & _
+        vbCrLf & "=== VBA REFERENCES (checked) ===" & vbCrLf & _
+        GetReferencesList() & vbCrLf
+    Section_EnvironmentInfo = s
+End Function
+
+Private Function Section_SplitAndBackends() As String
+    Dim s As String
+    Dim linkedCount As Long, localCount As Long
+    Dim beList As Collection
+    Dim i As Long
+
+    GetTableSplitCounts linkedCount, localCount
+    Set beList = GetBackendSummaries()
+
+    s = "=== FRONT-END / BACK-END ===" & vbCrLf
+    s = s & IIf(linkedCount > 0, "Front-end/back-end split: Yes", "Front-end/back-end split: No") & vbCrLf
+    s = s & "Tables: " & localCount & " local, " & linkedCount & " linked" & vbCrLf
+
+    If beList Is Nothing Or beList.Count = 0 Then
+        s = s & "Back-end(s): (none or not linked)" & vbCrLf
+    Else
+        s = s & "Back-end(s):" & vbCrLf
+        For i = 1 To beList.Count
+            s = s & " - " & beList(i) & vbCrLf
+        Next
+    End If
+    s = s & vbCrLf
+    Section_SplitAndBackends = s
+End Function
+
+Private Function Section_RowCounts() As String
+    Dim db As DAO.Database: Set db = CurrentDb
+    Dim t As DAO.TableDef
+    Dim s As String, sql As String
+    Dim rs As DAO.Recordset
+
+    s = "=== ROW COUNTS ===" & vbCrLf
+    For Each t In db.TableDefs
+        If Left$(t.name, 4) <> "MSys" Then
+            sql = "SELECT COUNT(*) AS Cnt FROM [" & t.name & "]"
+            On Error Resume Next
+            Set rs = db.OpenRecordset(sql, dbOpenSnapshot)
+            If Err.Number = 0 Then
+                s = s & "- " & t.name & ": " & rs!Cnt & vbCrLf
+                rs.Close
+            Else
+                s = s & "- " & t.name & ": (count failed: " & Err.Number & " " & Err.Description & ")" & vbCrLf
+                Err.Clear
+            End If
+            On Error GoTo 0
+        End If
+    Next
+    s = s & vbCrLf
+    Section_RowCounts = s
+End Function
+
+Private Function Section_TableIndexes() As String
+    Dim db As DAO.Database: Set db = CurrentDb
+    Dim t As DAO.TableDef, idx As DAO.Index
+    Dim s As String, hdr As String
+
+    s = "=== TABLE KEYS & INDEXES ===" & vbCrLf
+    For Each t In db.TableDefs
+        If Left$(t.name, 4) <> "MSys" Then
+            hdr = "Table: " & t.name & vbCrLf
+            On Error Resume Next
+            Set idx = t.Indexes("PrimaryKey")
+            If Not idx Is Nothing Then
+                hdr = hdr & "  Primary Key: " & JoinIndexFields(idx) & vbCrLf
+            Else
+                hdr = hdr & "  Primary Key: (none)" & vbCrLf
+            End If
+            On Error GoTo 0
+
+            hdr = hdr & "  Indexes:" & vbCrLf
+            For Each idx In t.Indexes
+                If idx.name <> "PrimaryKey" Then
+                    hdr = hdr & "    - " & idx.name & " (Unique=" & idx.Unique & _
+                          ", IgnoreNulls=" & idx.IgnoreNulls & "): " & JoinIndexFields(idx) & vbCrLf
+                End If
+            Next
+            s = s & hdr & vbCrLf
+        End If
+    Next
+    Section_TableIndexes = s
+End Function
+
+Private Function JoinIndexFields(ByVal idx As DAO.Index) As String
+    Dim f As DAO.Field, parts As Collection, i As Long
+    Set parts = New Collection
+    For Each f In idx.fields
+        parts.Add f.name
+    Next
+    JoinIndexFields = ""
+    For i = 1 To parts.Count
+        JoinIndexFields = JoinIndexFields & parts(i)
+        If i < parts.Count Then JoinIndexFields = JoinIndexFields & ", "
+    Next
+End Function
+
+Private Function Section_Relationships() As String
+    Dim db As DAO.Database: Set db = CurrentDb
+    Dim rel As DAO.Relation, f As DAO.Field
+    Dim s As String, attrs As String, fields As String
+
+    s = "=== RELATIONSHIPS ===" & vbCrLf
+    For Each rel In db.Relations
+        attrs = ""
+        If (rel.Attributes And dbRelationDontEnforce) = 0 Then
+            attrs = " EnforceRI"
+        Else
+            attrs = " (Not Enforced)"
+        End If
+        If (rel.Attributes And dbRelationUpdateCascade) <> 0 Then attrs = attrs & " UpdateCascade"
+        If (rel.Attributes And dbRelationDeleteCascade) <> 0 Then attrs = attrs & " DeleteCascade"
+
+        fields = ""
+        For Each f In rel.fields
+            fields = fields & f.name & " -> " & f.ForeignName & ", "
+        Next
+        If Len(fields) > 2 Then fields = Left$(fields, Len(fields) - 2)
+
+        s = s & "- " & rel.name & ": " & rel.Table & " -> " & rel.ForeignTable & _
+                " [" & fields & "]" & attrs & vbCrLf
+    Next
+    s = s & vbCrLf
+    Section_Relationships = s
+End Function
+
+Private Function Section_QueriesSQL() As String
+    On Error GoTo ErrHandler
+    Dim s As String
+    Dim q As AccessObject
+    Dim qd As DAO.QueryDef
+
+    s = "=== QUERIES (SQL) ===" & vbCrLf
+    For Each q In CurrentData.AllQueries
+        Set qd = CurrentDb.QueryDefs(q.name)
+        s = s & "--- Query: " & q.name & " ---" & vbCrLf
+        s = s & qd.sql & vbCrLf & vbCrLf
+    Next
+    s = s & vbCrLf
+    Section_QueriesSQL = s
+    Exit Function
+ErrHandler:
+    Section_QueriesSQL = "Queries enumeration failed: " & Err.Number & " - " & Err.Description & vbCrLf & vbCrLf
+End Function
+
+' ============================================================
+' Inline SaveAsText for forms/reports (write to temp, read back, delete)
+' ============================================================
+
+Private Function Forms_SaveAsText_Inline(ByVal formNames As Variant) As String
+    Dim i As Long, name As String, s As String
+    For i = LBound(formNames) To UBound(formNames)
+        name = CStr(formNames(i))
+        If ObjectExists(acForm, name) Then
+            s = s & "### FORM: " & name & " (SaveAsText)" & vbCrLf
+            s = s & ReadSaveAsTextToString(acForm, name) & vbCrLf & vbCrLf
+        Else
+            s = s & "### FORM: " & name & " (not found)" & vbCrLf & vbCrLf
+        End If
+    Next
+    Forms_SaveAsText_Inline = s
+End Function
+
+Private Function Reports_SaveAsText_Inline(ByVal reportNames As Variant) As String
+    Dim i As Long, name As String, s As String
+    For i = LBound(reportNames) To UBound(reportNames)
+        name = CStr(reportNames(i))
+        If ObjectExists(acReport, name) Then
+            s = s & "### REPORT: " & name & " (SaveAsText)" & vbCrLf
+            s = s & ReadSaveAsTextToString(acReport, name) & vbCrLf & vbCrLf
+        Else
+            s = s & "### REPORT: " & name & " (not found)" & vbCrLf & vbCrLf
+        End If
+    Next
+    Reports_SaveAsText_Inline = s
+End Function
+
+
+Private Function ReadSaveAsTextToString(ByVal objType As AcObjectType, ByVal objName As String) As String
+    On Error GoTo ErrHandler
+    Dim tmpFolder As String, tmp As String, content As String
+
+    tmpFolder = GetTempPath()
+    tmp = BuildSafePath(tmpFolder, "sav_" & objName & "_" & Format(Now, "yymmdd_hhnnss") & ".txt")
+
+    Application.SaveAsText objType, objName, tmp
+    content = ReadTextFile(tmp)
+    On Error Resume Next
+    Kill tmp
+    On Error GoTo 0
+
+    ReadSaveAsTextToString = content
+    Exit Function
+ErrHandler:
+    ReadSaveAsTextToString = "(SaveAsText failed for " & objName & ": " & Err.Number & " - " & Err.Description & ")"
+End Function
+
+
+' ============================================================
+' Inline code modules (late-bound export via VBIDE, read back, delete)
+' ============================================================
+
+
+Private Function Modules_Inline_All() As String
+    On Error GoTo FailWithDetails
+    Dim vbProj As Object, vbComp As Object
+    Dim s As String, tmp As String, ext As String, content As String
+
+    Set vbProj = Application.VBE.ActiveVBProject
+
+    For Each vbComp In vbProj.VBComponents
+        Select Case vbComp.Type
+            Case 1: ext = ".bas"    ' Std module
+            Case 2, 100: ext = ".cls" ' Class / Document
+            Case 3: ext = ".frm"    ' MSForm (rare in Access)
+            Case Else: ext = ".txt"
+        End Select
+
+        tmp = BuildSafePath(GetTempPath(), "mod_" & vbComp.name & "_" & Format(Now, "yymmdd_hhnnss") & ext)
+        vbComp.Export tmp
+        content = ReadTextFile(tmp)
+
+        s = s & "----- MODULE: " & vbComp.name & " (" & ext & ") -----" & vbCrLf
+        s = s & content & vbCrLf & vbCrLf
+
+        On Error Resume Next
+        Kill tmp
+        On Error GoTo 0
+    Next
+
+    Modules_Inline_All = s
+    Exit Function
+
+FailWithDetails:
+    Modules_Inline_All = "Module export failed: " & Err.Number & " - " & Err.Description & vbCrLf & _
+                         "Hint: If this is a file path issue, verify GetTempPath() returns a valid folder." & vbCrLf & vbCrLf
+End Function
+
+
+' ============================================================
+' Utilities: environment, back-end, references, file I/O, etc.
+' ============================================================
+
+Private Function GetAccessVersion() As String
+    On Error Resume Next
+    Dim ver As String
+    ver = "Version " & Application.Version & " Build " & CStr(SysCmd(acSysCmdAccessVer))
+    If Err.Number <> 0 Or Len(ver) = 0 Then ver = "Unknown"
+    GetAccessVersion = ver
+End Function
+
+Private Function GetOfficeBitness() As String
+#If Win64 Then
+    GetOfficeBitness = "64-bit"
+#Else
+    GetOfficeBitness = "32-bit"
+#End If
+End Function
+
+Private Function GetWindowsInfo() As String
+    On Error GoTo Fallback
+    Dim objWMI As Object, colOS As Object, os As Object
+    Set objWMI = GetObject("winmgmts:\\.\root\CIMV2")
+    Set colOS = objWMI.ExecQuery("SELECT Caption, Version, OSArchitecture FROM Win32_OperatingSystem")
+    For Each os In colOS
+        GetWindowsInfo = Trim(os.caption) & " " & Trim(os.Version)
+        If Not IsNull(os.OSArchitecture) Then
+            GetWindowsInfo = GetWindowsInfo & " (" & os.OSArchitecture & ")"
+        End If
+        Exit Function
+    Next
+Fallback:
+    If Len(GetWindowsInfo) = 0 Then
+        GetWindowsInfo = Nz(Environ$("OS"), "Windows") & " (exact version unavailable)"
+    End If
+End Function
+
+Private Sub GetTableSplitCounts(ByRef linkedCount As Long, ByRef localCount As Long)
+    On Error GoTo Done
+    Dim tdf As DAO.TableDef
+    For Each tdf In CurrentDb.TableDefs
+        If Left$(tdf.name, 4) = "MSys" Then
+            ' skip
+        ElseIf Len(tdf.connect & "") > 0 Then
+            linkedCount = linkedCount + 1
+        Else
+            localCount = localCount + 1
+        End If
+    Next
+Done:
+End Sub
+
+Private Function GetBackendSummaries() As Collection
+    On Error GoTo ErrHandler
+    Dim tdf As DAO.TableDef
+    Dim dict As Object ' Scripting.Dictionary
+    Dim key As Variant
+    Dim conn As String, summary As String
+
+    Set dict = CreateObject("Scripting.Dictionary")
+    For Each tdf In CurrentDb.TableDefs
+        If Left$(tdf.name, 4) <> "MSys" Then
+            If Len(tdf.connect & "") > 0 Then
+                conn = tdf.connect
+                summary = SummarizeConnect(conn)
+                If Not dict.Exists(summary) Then dict.Add summary, 1 Else dict(summary) = dict(summary) + 1
+            End If
+        End If
+    Next
+
+    Dim result As New Collection
+    For Each key In dict.Keys
+        result.Add CStr(key) & "  [" & dict(key) & " linked table(s)]"
+    Next
+    Set GetBackendSummaries = result
+    Exit Function
+
+ErrHandler:
+    Set GetBackendSummaries = Nothing
+End Function
+
+Private Function SummarizeConnect(ByVal connect As String) As String
+    Dim u As String: u = UCase$(connect)
+    Dim dbPath As String
+    If InStr(u, "ODBC;") > 0 Then
+        SummarizeConnect = "ODBC -> " & ExtractDsnServerDatabase(connect)
+    ElseIf InStr(u, "DATABASE=") > 0 Then
+        dbPath = ExtractAfter(connect, "DATABASE=")
+        dbPath = ExtractUntilAny(dbPath, ";")
+        SummarizeConnect = "ACCDB/MDB -> " & dbPath
+    Else
+        SummarizeConnect = connect
+    End If
+End Function
+
+Private Function ExtractDsnServerDatabase(ByVal connect As String) As String
+    Dim server As String, db As String, dsn As String
+    server = GetConnPart(connect, "SERVER")
+    db = GetConnPart(connect, "DATABASE")
+    dsn = GetConnPart(connect, "DSN")
+    If Len(dsn) > 0 Then
+        ExtractDsnServerDatabase = "DSN=" & dsn
+        If Len(server) > 0 Then ExtractDsnServerDatabase = ExtractDsnServerDatabase & "; SERVER=" & server
+        If Len(db) > 0 Then ExtractDsnServerDatabase = ExtractDsnServerDatabase & "; DATABASE=" & db
+    ElseIf Len(server) > 0 Or Len(db) > 0 Then
+        ExtractDsnServerDatabase = "SERVER=" & server & "; DATABASE=" & db
+    Else
+        ExtractDsnServerDatabase = "(ODBC connection details not fully available)"
+    End If
+End Function
+
+Private Function GetConnPart(ByVal connect As String, ByVal key As String) As String
+    Dim parts() As String, i As Long, kv() As String
+    parts = Split(connect, ";")
+    For i = LBound(parts) To UBound(parts)
+        If UCase$(Left$(parts(i), Len(key) + 1)) = UCase$(key & "=") Then
+            kv = Split(parts(i), "=")
+            If UBound(kv) >= 1 Then
+                GetConnPart = kv(1)
+                Exit Function
+            End If
+        End If
+    Next
+    GetConnPart = ""
+End Function
+
+Private Function ExtractAfter(ByVal text As String, ByVal token As String) As String
+    Dim p As Long: p = InStr(1, text, token, vbTextCompare)
+    If p > 0 Then ExtractAfter = Mid$(text, p + Len(token)) Else ExtractAfter = text
+End Function
+
+Private Function ExtractUntilAny(ByVal text As String, ParamArray terminators() As Variant) As String
+    Dim i As Long, t As String, p As Long, best As Long
+    best = 0
+    For i = LBound(terminators) To UBound(terminators)
+        t = CStr(terminators(i))
+        p = InStr(text, t)
+        If p > 0 Then If best = 0 Or p < best Then best = p
+    Next
+    If best > 0 Then ExtractUntilAny = Left$(text, best - 1) Else ExtractUntilAny = text
+End Function
+
+Private Function ObjectExists(ByVal objType As AcObjectType, ByVal objName As String) As Boolean
+    On Error GoTo NotFound
+    Select Case objType
+        Case acForm:   ObjectExists = CurrentProject.AllForms(objName).IsLoaded Or True
+        Case acReport: ObjectExists = CurrentProject.AllReports(objName).IsLoaded Or True
+        Case Else:     ObjectExists = False
+    End Select
+    Exit Function
+NotFound:
+    ObjectExists = False
+End Function
+
+
+Private Function GetTempPath() As String
+    On Error Resume Next
+    Dim fso As Object, p As String
+
+    ' 1) FileSystemObject (TemporaryFolder)
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    p = fso.GetSpecialFolder(2).path  ' 2 = TemporaryFolder
+    If Len(p) > 0 Then
+        If Right$(p, 1) <> "\" Then p = p & "\"
+        GetTempPath = p
+        Exit Function
+    End If
+
+    ' 2) Environment variables
+    p = Environ$("TEMP")
+    If Len(p) = 0 Then p = Environ$("TMP")
+    If Len(p) > 0 Then
+        If Right$(p, 1) <> "\" Then p = p & "\"
+        GetTempPath = p
+        Exit Function
+    End If
+
+    ' 3) Last resort: database folder
+    p = CurrentProject.path
+    If Len(p) > 0 Then
+        If Right$(p, 1) <> "\" Then p = p & "\"
+        GetTempPath = p
+    Else
+        ' 4) Absolute last resort
+        GetTempPath = "C:\"
+    End If
+End Function
+
+
+Private Function ReadTextFile(ByVal path As String) As String
+    Dim f As Integer, line As String, content As String
+    f = FreeFile
+    Open path For Input As #f
+    Do While Not EOF(f)
+        Line Input #f, line
+        content = content & line & vbCrLf
+    Loop
+    Close #f
+    ReadTextFile = content
+End Function
+
+Private Sub WriteTextFile(ByVal path As String, ByVal content As String)
+    Dim f As Integer
+    f = FreeFile
+    Open path For Output As #f
+    Print #f, content
+    Close #f
+End Sub
+
+
+Private Sub EnsureFolderRecursive(ByVal folderPath As String)
+    ' Creates the full folder hierarchy if missing, e.g., C:\A\B\C
+    Dim parts() As String, i As Long, cur As String
+
+    folderPath = Trim$(folderPath)
+    If Len(folderPath) = 0 Then Err.Raise vbObjectError + 513, , "Empty destination path."
+
+    ' Normalize separators and strip trailing backslash
+    folderPath = Replace(folderPath, "/", "\")
+    If Right$(folderPath, 1) = "\" Then folderPath = Left$(folderPath, Len(folderPath) - 1)
+
+    parts = Split(folderPath, "\")
+    cur = parts(0)
+
+    ' Handle drive root like "C:" -> "C:\"
+    If Len(cur) = 2 And Right$(cur, 1) = ":" Then
+        cur = cur & "\"
+        i = 1
+    Else
+        i = 0
+    End If
+
+    For i = i To UBound(parts)
+        If cur = "" Then
+            cur = parts(i)
+        ElseIf Right$(cur, 1) = "\" Then
+            cur = cur & parts(i)
+        Else
+            cur = cur & "\" & parts(i)
+        End If
+
+        If Dir(cur, vbDirectory) = "" Then
+            MkDir cur
+        End If
+    Next i
+End Sub
+
+
+Private Function BuildSafePath(ByVal folder As String, ByVal fileName As String) As String
+    ' Defensive combine of folder + filename with exactly one backslash
+    If Len(folder) = 0 Then Err.Raise vbObjectError + 514, , "Empty folder for BuildSafePath."
+    If Right$(folder, 1) = "\" Then
+        BuildSafePath = folder & fileName
+    Else
+        BuildSafePath = folder & "\" & fileName
+    End If
+End Function
+
+
+Private Function GetReferencesList() As String
+    On Error GoTo ErrHandler
+    Dim s As String
+    Dim r As Reference
+    For Each r In Application.References
+        s = s & IIf(r.IsBroken, "MISSING: ", "? ") & r.name & "  " & SafePath(r) & _
+            "  v" & r.Major & "." & r.Minor & vbCrLf
+    Next
+    GetReferencesList = s
+    Exit Function
+ErrHandler:
+    GetReferencesList = "(Unable to enumerate references: " & Err.Number & " - " & Err.Description & ")"
+End Function
+
+Private Function SafePath(ByVal r As Reference) As String
+    On Error GoTo Fallback
+    SafePath = r.FullPath
+    Exit Function
+Fallback:
+    SafePath = "(path unavailable)"
+End Function
+
+
+Private Function IsVbeAccessible() As Boolean
+    Dim dummy As Long
+    On Error Resume Next
+    dummy = Application.VBE.ActiveVBProject.VBComponents.Count
+    IsVbeAccessible = (Err.Number = 0)
+End Function
+
+
+
+
+
+
+
