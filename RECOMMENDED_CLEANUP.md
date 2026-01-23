@@ -61,6 +61,39 @@ Both tables have relationships and indexes defined but zero rows, suggesting the
 
 ---
 
+## Planned Changes
+
+### Unify SALES and PROJECT Order Number Formats
+
+**Current State:**
+
+| Order Type | Format | Example |
+|------------|--------|---------|
+| SALES | `<BaseToken>-<SystemLetter><Seq>-<BackorderNo>` | `576001-P001-00` |
+| PROJECT | `<BaseToken>-<QualifierCode><SystemLetter><Seq>-<BackorderNo>` | `TAGO25-CMN001-00` |
+
+**Desired State:**
+
+| Order Type | Format | Example |
+|------------|--------|---------|
+| SALES | `<BaseToken>-<QualifierCode><SystemLetter><Seq>-<BackorderNo>` | `576001-CMN001-00` |
+| PROJECT | `<BaseToken>-<QualifierCode><SystemLetter><Seq>-<BackorderNo>` | `TAGO25-CMN001-00` |
+
+**Requirements:**
+- SALES order numbers should match PROJECT order number format (include QualifierCode)
+- SALES BaseTokens continue to use year-based numbering scheme:
+  - 2026: starts at 576000
+  - 2027: starts at 577000
+  - Pattern: `576000 + (year - 2026) * 1000`
+
+**Affected Code:**
+- `basOrderNumberGen.BuildSalesOrderNumber` - needs QualifierCode parameter added
+- `basOrderNumberGen.NextSeqForSales` - needs to account for qualifier in sequence lookup
+- `basBatchWizard.CreateOneOrder` - may need updates for SALES flow
+- `frmSalesOrderEntry` - UI needs to capture QualifierCode for SALES orders
+
+---
+
 ## Notes
 
 - The `basSeqAllocator` approach using the `OrderSeq` table is more robust for concurrent multi-user access
