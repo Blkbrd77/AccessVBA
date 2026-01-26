@@ -1,0 +1,94 @@
+PREVIEW FIX FOR dlgBatchGenerateOrders
+=======================================
+
+Issue: Preview button shows all order numbers as the same (e.g., CMN001, CMN001, CMN001)
+       instead of incrementing (CMN001, CMN002, CMN003).
+
+Cause: When IsPreview = True, ReserveSeq returns the current sequence without incrementing
+       the database. Each call returns the same value.
+
+Solution: Track sequence offsets locally during preview.
+
+In basBatchWizard module, replace the BuildPreview subroutine with this:
+
+-------------------------------------------------------------------------------
+
+Public Sub BuildPreview()
+    On Error GoTo EH
+
+    Dim db As DAO.Database
+    Dim rsQ As DAO.Recordset
+    Dim i As Long, qty As Long, seq As Long, baseSeq As Long
+    Dim orderNum As String
+    Dim seqOffset As Object  ' Dictionary to track offsets per qualifier
+
+    Set db = CurrentDb
+    Set seqOffset = CreateObject("Scripting.Dictionary")
+
+    ' Capture wizard state ONCE
+    With Forms!dlgBatchGenerateOrders
+        mScope = .cboOrderType
+        mBaseToken = .txtBaseToken
+        mSystemLetter = Nz(.cboSystemLetter, "")
+        mBackorderNo = Nz(.txtBackOrderNo, 0)
+    End With
+
+    db.Execute "DELETE FROM tmpBatchPreview;", dbFailOnError
+
+    Set rsQ = db.OpenRecordset( _
+        "SELECT QualifierCode, Qty FROM tmpQualifierQty WHERE Nz(Qty,0) > 0", _
+        dbOpenSnapshot _
+    )
+
+    Do While Not rsQ.EOF
+        qty = CLng(rsQ!qty)
+
+        ' Get the base sequence once per qualifier
+        baseSeq = ReserveSeq( _
+                    mScope, _
+                    mBaseToken, _
+                    rsQ!QualifierCode, _
+                    mSystemLetter, _
+                    True _
+                  )
+
+        For i = 1 To qty
+            ' Calculate actual sequence: base + offset
+            If Not seqOffset.Exists(rsQ!QualifierCode) Then
+                seqOffset(rsQ!QualifierCode) = 0
+            End If
+            seq = baseSeq + seqOffset(rsQ!QualifierCode)
+            seqOffset(rsQ!QualifierCode) = seqOffset(rsQ!QualifierCode) + 1
+
+            orderNum = mBaseToken & "-" & _
+                       rsQ!QualifierCode & _
+                       Format(seq, "000") & "-" & _
+                       Format(mBackorderNo, "00")
+
+            db.Execute _
+                "INSERT INTO tmpBatchPreview (OrderNumber, QualifierCode, SeqNo) " & _
+                "VALUES ('" & orderNum & "', '" & rsQ!QualifierCode & "', " & seq & ");", _
+                dbFailOnError
+        Next i
+
+        rsQ.MoveNext
+    Loop
+
+    rsQ.Close
+    Set rsQ = Nothing
+    Set seqOffset = Nothing
+    Set db = Nothing
+    Exit Sub
+
+EH:
+    MsgBox "Preview failed: " & Err.Description, vbExclamation
+End Sub
+
+-------------------------------------------------------------------------------
+
+Also required: Add a txtBackOrderNo textbox control to the dlgBatchGenerateOrders form
+               (with default value of 0).
+
+Also required: In Form_dlgBatchGenerateOrders, uncomment the BuildPreview call:
+               Change: 'BuildPreview Scope, baseT, sysLet
+               To:     BuildPreview
