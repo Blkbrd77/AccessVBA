@@ -20,18 +20,25 @@ Public Sub BuildPreview()
     Dim rsQ As DAO.Recordset
     Dim i As Long, qty As Long, seq As Long, baseSeq As Long
     Dim orderNum As String
-    Dim seqOffset As Object  ' Dictionary to track offsets per qualifier
+    Dim seqOffset As Object
+
+    Dim pScope As String
+    Dim pBaseToken As String
+    Dim pSystemLetter As String
+    Dim pBackorderNo As Long
 
     Set db = CurrentDb
     Set seqOffset = CreateObject("Scripting.Dictionary")
 
-    ' Capture wizard state ONCE
     With Forms!dlgBatchGenerateOrders
-        mScope = .cboOrderType
-        mBaseToken = .txtBaseToken
-        mSystemLetter = Nz(.cboSystemLetter, "")
-        mBackorderNo = Nz(.txtBackOrderNo, 0)
+        pScope = Nz(.cboOrderType, "")
+        pBaseToken = Nz(.txtBaseToken, "")
+        pSystemLetter = Nz(.cboSystemLetter, "")
+        pBackorderNo = Nz(.txtBackOrderNo, 0)
     End With
+
+    ' DEBUG: Check form values
+    MsgBox "Scope: " & pScope & vbCrLf & "Base: " & pBaseToken & vbCrLf & "SysLtr: " & pSystemLetter
 
     db.Execute "DELETE FROM tmpBatchPreview;", dbFailOnError
 
@@ -40,30 +47,36 @@ Public Sub BuildPreview()
         dbOpenSnapshot _
     )
 
+    ' DEBUG: Check if any qualifiers with qty
+    MsgBox "Qualifier rows found: " & rsQ.RecordCount
+
+    If rsQ.EOF Then
+        MsgBox "No qualifiers with Qty > 0 found"
+        GoTo Cleanup
+    End If
+
     Do While Not rsQ.EOF
         qty = CLng(rsQ!qty)
 
-        ' Get the base sequence once per qualifier
         baseSeq = ReserveSeq( _
-                    mScope, _
-                    mBaseToken, _
+                    pScope, _
+                    pBaseToken, _
                     rsQ!QualifierCode, _
-                    mSystemLetter, _
+                    pSystemLetter, _
                     True _
                   )
 
         For i = 1 To qty
-            ' Calculate actual sequence: base + offset
             If Not seqOffset.Exists(rsQ!QualifierCode) Then
                 seqOffset(rsQ!QualifierCode) = 0
             End If
             seq = baseSeq + seqOffset(rsQ!QualifierCode)
             seqOffset(rsQ!QualifierCode) = seqOffset(rsQ!QualifierCode) + 1
 
-            orderNum = mBaseToken & "-" & _
+            orderNum = pBaseToken & "-" & _
                        rsQ!QualifierCode & _
                        Format(seq, "000") & "-" & _
-                       Format(mBackorderNo, "00")
+                       Format(pBackorderNo, "00")
 
             db.Execute _
                 "INSERT INTO tmpBatchPreview (OrderNumber, QualifierCode, SeqNo) " & _
@@ -74,6 +87,10 @@ Public Sub BuildPreview()
         rsQ.MoveNext
     Loop
 
+    ' DEBUG: Show how many were inserted
+    MsgBox "Preview records created: " & DCount("*", "tmpBatchPreview")
+
+Cleanup:
     rsQ.Close
     Set rsQ = Nothing
     Set seqOffset = Nothing
@@ -92,3 +109,7 @@ Also required: Add a txtBackOrderNo textbox control to the dlgBatchGenerateOrder
 Also required: In Form_dlgBatchGenerateOrders, uncomment the BuildPreview call:
                Change: 'BuildPreview Scope, baseT, sysLet
                To:     BuildPreview
+
+-------------------------------------------------------------------------------
+DEBUG VERSION: This version includes MsgBox statements to help diagnose issues.
+Remove the MsgBox lines once the preview is working correctly.
