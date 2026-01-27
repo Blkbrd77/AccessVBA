@@ -1,0 +1,19 @@
+19:00:05      Dialog.Commit: start         Err=0
+18:59:00      Dialog.Unload  Err=0
+18:59:00      Dialog.Close   Err=019:00:35              Dialog.Commit: start         Err=0
+19:00:35      Dialog.Commit: success       Err=0
+19:00:35      Dialog.Unload  Err=0
+19:00:35      Dialog.Close   Err=0
+19:00:35      Launcher: after dialog returned            Err=0
+19:00:35      Launcher: success branch     Err=0
+
+18:59:01      Launcher: before open        Err=0
+18:59:01      Dialog.Open    Err=0
+18:59:01      Reset_Qty_From_Qualifiers (silent)         Err=0
+18:59:29      Dialog.Unload  Err=0
+18:59:29      Dialog.Close   Err=0
+18:59:29      Launcher: after dialog returned            Err=0
+18:59:29      Launcher: canceled/no-status branch        Err=0
+18:59:34      Launcher: before open        Err=0
+18:59:34      Dialog.Open    Err=0
+18:59:34      Reset_Qty_From_Qualifiers (silent)         Err=0
