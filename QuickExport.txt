@@ -1,0 +1,112 @@
+QUICK DATABASE EXPORT FOR REVIEW
+=================================
+
+Paste this into a new module and run ExportForReview from the Immediate Window.
+It will create a text file on your desktop with table structures and sample data.
+
+===============================================================================
+
+Option Compare Database
+Option Explicit
+
+Public Sub ExportForReview()
+    On Error GoTo EH
+
+    Dim fPath As String
+    Dim fNum As Integer
+    Dim db As DAO.Database
+    Dim tdf As DAO.TableDef
+    Dim fld As DAO.Field
+    Dim rs As DAO.Recordset
+    Dim i As Long
+    Dim rowCount As Long
+
+    ' Output to desktop
+    fPath = Environ("USERPROFILE") & "\Desktop\DatabaseExport.txt"
+    fNum = FreeFile
+    Open fPath For Output As #fNum
+
+    Set db = CurrentDb
+
+    Print #fNum, "DATABASE EXPORT FOR REVIEW"
+    Print #fNum, "Generated: " & Now()
+    Print #fNum, String(60, "=")
+    Print #fNum, ""
+
+    ' Export each table
+    For Each tdf In db.TableDefs
+        ' Skip system tables
+        If Left(tdf.Name, 4) <> "MSys" And Left(tdf.Name, 4) <> "~TMP" Then
+
+            Print #fNum, "TABLE: " & tdf.Name
+            Print #fNum, String(40, "-")
+
+            ' List fields
+            Print #fNum, "FIELDS:"
+            For Each fld In tdf.Fields
+                Print #fNum, "  - " & fld.Name & " (" & FieldTypeName(fld.Type) & ")"
+            Next fld
+
+            ' Row count
+            On Error Resume Next
+            rowCount = DCount("*", tdf.Name)
+            On Error GoTo EH
+            Print #fNum, ""
+            Print #fNum, "ROW COUNT: " & rowCount
+
+            ' Sample data (first 5 rows)
+            If rowCount > 0 Then
+                Print #fNum, ""
+                Print #fNum, "SAMPLE DATA (first 5 rows):"
+
+                Set rs = db.OpenRecordset(tdf.Name, dbOpenSnapshot)
+                i = 0
+                Do While Not rs.EOF And i < 5
+                    Print #fNum, "  Row " & (i + 1) & ":"
+                    For Each fld In rs.Fields
+                        Print #fNum, "    " & fld.Name & ": " & Nz(fld.Value, "(null)")
+                    Next fld
+                    rs.MoveNext
+                    i = i + 1
+                Loop
+                rs.Close
+                Set rs = Nothing
+            End If
+
+            Print #fNum, ""
+            Print #fNum, String(60, "=")
+            Print #fNum, ""
+        End If
+    Next tdf
+
+    Close #fNum
+
+    MsgBox "Export complete!" & vbCrLf & vbCrLf & fPath, vbInformation
+
+    ' Open the file
+    Shell "notepad.exe """ & fPath & """", vbNormalFocus
+
+    Exit Sub
+
+EH:
+    Close #fNum
+    MsgBox "Export error: " & Err.Description, vbCritical
+End Sub
+
+Private Function FieldTypeName(fType As Integer) As String
+    Select Case fType
+        Case dbBoolean: FieldTypeName = "Yes/No"
+        Case dbByte: FieldTypeName = "Byte"
+        Case dbInteger: FieldTypeName = "Integer"
+        Case dbLong: FieldTypeName = "Long"
+        Case dbCurrency: FieldTypeName = "Currency"
+        Case dbSingle: FieldTypeName = "Single"
+        Case dbDouble: FieldTypeName = "Double"
+        Case dbDate: FieldTypeName = "Date/Time"
+        Case dbText: FieldTypeName = "Text"
+        Case dbLongBinary: FieldTypeName = "OLE Object"
+        Case dbMemo: FieldTypeName = "Memo"
+        Case dbGUID: FieldTypeName = "GUID"
+        Case Else: FieldTypeName = "Type " & fType
+    End Select
+End Function
