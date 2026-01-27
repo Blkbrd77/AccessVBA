@@ -14,7 +14,6 @@ STEP 1: Update cmdPreview_Click in Form_dlgBatchGenerateOrders
 ===============================================================================
 
 Private Sub cmdPreview_Click()
-    MsgBox "Preview button clicked!"   ' <-- DEBUG: Confirm button responds
     On Error GoTo EH
 
     Dim Scope As String, baseT As String, sysLet As String
@@ -25,7 +24,7 @@ Private Sub cmdPreview_Click()
     End If
 
     Trace "Dialog.Preview: start"
-    BuildPreview                        ' <-- UNCOMMENTED (no parameters)
+    BuildPreview
     Me.lstPreview.Requery
     Trace "Dialog.Preview: done"
     Exit Sub
@@ -62,9 +61,6 @@ Public Sub BuildPreview()
         pBackorderNo = Nz(.txtBackOrderNo, 0)
     End With
 
-    ' DEBUG: Check form values
-    MsgBox "Scope: " & pScope & vbCrLf & "Base: " & pBaseToken & vbCrLf & "SysLtr: " & pSystemLetter
-
     db.Execute "DELETE FROM tmpBatchPreview;", dbFailOnError
 
     Set rsQ = db.OpenRecordset( _
@@ -72,13 +68,7 @@ Public Sub BuildPreview()
         dbOpenSnapshot _
     )
 
-    ' DEBUG: Check if any qualifiers with qty
-    MsgBox "Qualifier rows found: " & rsQ.RecordCount
-
-    If rsQ.EOF Then
-        MsgBox "No qualifiers with Qty > 0 found"
-        GoTo Cleanup
-    End If
+    If rsQ.EOF Then GoTo Cleanup
 
     Do While Not rsQ.EOF
         qty = CLng(rsQ!qty)
@@ -112,9 +102,6 @@ Public Sub BuildPreview()
         rsQ.MoveNext
     Loop
 
-    ' DEBUG: Show how many were inserted
-    MsgBox "Preview records created: " & DCount("*", "tmpBatchPreview")
-
 Cleanup:
     rsQ.Close
     Set rsQ = Nothing
@@ -131,7 +118,3 @@ STEP 3: Add txtBackOrderNo control to dlgBatchGenerateOrders form
 ===============================================================================
 
 Add a TextBox named "txtBackOrderNo" to the form with a default value of 0.
-
-===============================================================================
-DEBUG VERSION: Remove MsgBox statements once preview is working correctly.
-===============================================================================
