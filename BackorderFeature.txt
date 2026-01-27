@@ -1,0 +1,282 @@
+BACKORDER FEATURE FOR frmOrderList
+===================================
+
+Feature: Create a backorder from an existing order with one click.
+- User selects an order in frmOrderList
+- Clicks "Create Backorder" button
+- System creates new order with incremented BackorderNo
+- List filters to show only the new backorder (like batch commit)
+- When filter cleared, backorder shows inline with other orders
+
+===============================================================================
+STEP 1: Add cmdCreateBackorder button to frmOrderList
+===============================================================================
+
+In Design View, add a Command Button with these properties:
+    Name: cmdCreateBackorder
+    Caption: Create Backorder
+    OnClick: [Event Procedure]
+
+===============================================================================
+STEP 2: Add click handler to Form_frmOrderList module
+===============================================================================
+
+Private Sub cmdCreateBackorder_Click()
+    On Error GoTo EH
+
+    ' Validate that an order is selected
+    If IsNull(Me!SOID) Or Me!SOID = 0 Then
+        MsgBox "Please select an order first.", vbExclamation
+        Exit Sub
+    End If
+
+    Dim sourceSOID As Long
+    sourceSOID = Me!SOID
+
+    ' Confirm with user
+    Dim orderNum As String
+    orderNum = Nz(Me!OrderNumber, "(no number)")
+    If MsgBox("Create a backorder from:" & vbCrLf & vbCrLf & _
+              orderNum & vbCrLf & vbCrLf & _
+              "Continue?", vbYesNo + vbQuestion, "Create Backorder") = vbNo Then
+        Exit Sub
+    End If
+
+    ' Clear any prior status
+    TempClear "BatchResult", "BatchErr", "BatchID", "CreatedCount"
+
+    Trace "Backorder: creating from SOID " & sourceSOID
+
+    ' Create the backorder
+    Dim newSOID As Long
+    Dim newBatchID As String
+    newBatchID = NewGuidString()
+
+    newSOID = CreateBackorder(sourceSOID, newBatchID)
+
+    If newSOID > 0 Then
+        ' Success - set TempVars like batch commit does
+        TempVars("BatchResult") = "Committed"
+        TempVars("BatchID") = newBatchID
+        TempVars("CreatedCount") = "1"
+
+        Trace "Backorder: success, new SOID=" & newSOID
+
+        ' Apply filter to show only the new backorder
+        Me.FilterOn = False
+        Me.Filter = vbNullString
+        mBatchFilter = "BatchID='" & Replace(newBatchID, "'", "''") & "'"
+
+        RefreshPage
+
+        On Error Resume Next
+        Me.Recordset.MoveFirst
+        On Error GoTo 0
+
+        ' Show success message with new order number
+        Dim newOrderNum As String
+        newOrderNum = Nz(DLookup("OrderNumber", "SalesOrders", "SOID=" & newSOID), "")
+        MsgBox "Backorder created successfully:" & vbCrLf & vbCrLf & _
+               newOrderNum, vbInformation, "Backorder Created"
+    Else
+        TempVars("BatchResult") = "Error"
+        TempVars("BatchErr") = "CreateBackorder returned 0"
+        MsgBox "Failed to create backorder.", vbCritical
+    End If
+
+    ClearHandledError "frmOrderList.Backorder"
+    Exit Sub
+
+EH:
+    TempVars("BatchResult") = "Error"
+    TempVars("BatchErr") = Err.Number & ": " & Err.Description
+    MsgBox "Backorder failed: " & Err.Description, vbCritical
+End Sub
+
+===============================================================================
+STEP 3: Add CreateBackorder function to basOrderFunctions (or new module)
+===============================================================================
+
+If you don't have basOrderFunctions, create a new Standard Module with that name.
+
+'--------------------------------------------
+' CreateBackorder: Create a backorder from an existing order
+' Returns: New SOID on success, 0 on failure
+'--------------------------------------------
+Public Function CreateBackorder(ByVal SourceSOID As Long, ByVal BatchID As String) As Long
+    On Error GoTo EH
+
+    Dim db As DAO.Database
+    Dim rsSource As DAO.Recordset
+    Dim rsNew As DAO.Recordset
+    Dim rsEntry As DAO.Recordset
+
+    Dim OrderType As String
+    Dim BaseToken As String
+    Dim SystemLetter As String
+    Dim QualifierCode As String
+    Dim SequenceNo As Long
+    Dim CustomerName As Variant
+    Dim CustomerCode As Variant
+    Dim PONumber As Variant
+    Dim DateReceived As Variant
+
+    Dim maxBackorder As Long
+    Dim newBackorderNo As Long
+    Dim newOrderNumber As String
+    Dim newSOID As Long
+
+    Set db = CurrentDb
+
+    ' Load source order
+    Set rsSource = db.OpenRecordset( _
+        "SELECT * FROM SalesOrders WHERE SOID=" & SourceSOID, _
+        dbOpenSnapshot)
+
+    If rsSource.EOF Then
+        MsgBox "Source order not found.", vbExclamation
+        CreateBackorder = 0
+        GoTo Cleanup
+    End If
+
+    ' Capture source order fields
+    OrderType = Nz(rsSource!OrderType, "")
+    BaseToken = Nz(rsSource!BaseToken, "")
+    SystemLetter = Nz(rsSource!SystemLetter, "")
+    CustomerName = rsSource!CustomerName
+    CustomerCode = rsSource!CustomerCode
+    PONumber = rsSource!PONumber
+    DateReceived = rsSource!DateReceived
+
+    rsSource.Close
+    Set rsSource = Nothing
+
+    ' Get QualifierCode and SequenceNo from SalesOrderEntry
+    Set rsSource = db.OpenRecordset( _
+        "SELECT QualifierCode, SequenceNo FROM SalesOrderEntry WHERE SOID=" & SourceSOID, _
+        dbOpenSnapshot)
+
+    If rsSource.EOF Then
+        MsgBox "Source order entry not found.", vbExclamation
+        CreateBackorder = 0
+        GoTo Cleanup
+    End If
+
+    QualifierCode = Nz(rsSource!QualifierCode, "")
+    SequenceNo = Nz(rsSource!SequenceNo, 0)
+
+    rsSource.Close
+    Set rsSource = Nothing
+
+    ' Find max BackorderNo for orders with same base pattern
+    ' Match on: OrderType, BaseToken, QualifierCode (from entry), SystemLetter, SequenceNo
+    Dim sql As String
+    sql = "SELECT MAX(SO.BackorderNo) AS MaxBO " & _
+          "FROM SalesOrders AS SO " & _
+          "INNER JOIN SalesOrderEntry AS SE ON SO.SOID = SE.SOID " & _
+          "WHERE SO.OrderType = '" & Replace(OrderType, "'", "''") & "' " & _
+          "AND SO.BaseToken = '" & Replace(BaseToken, "'", "''") & "' " & _
+          "AND SO.SystemLetter = '" & Replace(SystemLetter, "'", "''") & "' " & _
+          "AND SE.QualifierCode = '" & Replace(QualifierCode, "'", "''") & "' " & _
+          "AND SE.SequenceNo = " & SequenceNo & ";"
+
+    Set rsSource = db.OpenRecordset(sql, dbOpenSnapshot)
+
+    maxBackorder = Nz(rsSource!MaxBO, 0)
+    newBackorderNo = maxBackorder + 1
+
+    rsSource.Close
+    Set rsSource = Nothing
+
+    ' Build new order number: BaseToken-QualifierCode+SystemLetter+Seq-BackorderNo
+    newOrderNumber = BaseToken & "-" & _
+                     QualifierCode & SystemLetter & _
+                     Format(SequenceNo, "000") & "-" & _
+                     Format(newBackorderNo, "00")
+
+    ' Create new SalesOrders record
+    Set rsNew = db.OpenRecordset("SalesOrders", dbOpenDynaset, dbSeeChanges)
+    rsNew.AddNew
+        rsNew!OrderType = OrderType
+        rsNew!BaseToken = BaseToken
+        rsNew!SystemLetter = SystemLetter
+        rsNew!BackorderNo = newBackorderNo
+        rsNew!CustomerName = CustomerName
+        rsNew!CustomerCode = CustomerCode
+        rsNew!PONumber = PONumber
+        rsNew!DateReceived = DateReceived
+        rsNew!ActiveFlag = True
+        rsNew!OrderNumber = newOrderNumber
+        rsNew!DateBackorderCreated = Now()
+        rsNew!DateCreated = Now()
+        rsNew!BatchID = BatchID
+    rsNew.Update
+
+    rsNew.Bookmark = rsNew.LastModified
+    newSOID = rsNew!SOID
+    rsNew.Close
+    Set rsNew = Nothing
+
+    ' Create SalesOrderEntry record
+    Set rsEntry = db.OpenRecordset("SalesOrderEntry", dbOpenDynaset, dbSeeChanges)
+    rsEntry.AddNew
+        rsEntry!SOID = newSOID
+        rsEntry!QualifierCode = QualifierCode
+        rsEntry!SequenceNo = SequenceNo
+        rsEntry!IsDeleted = False
+        rsEntry!CreatedOn = Now()
+        rsEntry!OrderNumberDisplay = newOrderNumber
+    rsEntry.Update
+    rsEntry.Close
+    Set rsEntry = Nothing
+
+    CreateBackorder = newSOID
+
+Cleanup:
+    On Error Resume Next
+    If Not rsSource Is Nothing Then rsSource.Close
+    If Not rsNew Is Nothing Then rsNew.Close
+    If Not rsEntry Is Nothing Then rsEntry.Close
+    Set rsSource = Nothing
+    Set rsNew = Nothing
+    Set rsEntry = Nothing
+    Set db = Nothing
+    Exit Function
+
+EH:
+    MsgBox "CreateBackorder error: " & Err.Description, vbExclamation
+    CreateBackorder = 0
+    Resume Cleanup
+End Function
+
+===============================================================================
+STEP 4: Ensure helper functions exist
+===============================================================================
+
+These should already exist in your codebase, but verify:
+
+- NewGuidString() in basBatchWizard - generates unique BatchID
+- TempClear() - clears TempVars
+- Trace() - debug logging
+- ClearHandledError() - error cleanup
+- TV() - TempVars helper
+
+===============================================================================
+USAGE
+===============================================================================
+
+1. Open frmOrderList
+2. Select any order in the list
+3. Click "Create Backorder" button
+4. Confirm the prompt
+5. New backorder is created and displayed (filtered view)
+6. Clear filter to see all orders including the new backorder
+
+===============================================================================
+ORDER NUMBER EXAMPLES
+===============================================================================
+
+Original order:    576001-CMN001-00
+First backorder:   576001-CMN001-01
+Second backorder:  576001-CMN001-02
+etc.
