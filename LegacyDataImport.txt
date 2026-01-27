@@ -1,0 +1,191 @@
+LEGACY DATA IMPORT FROM EXCEL
+==============================
+
+Purpose: Clear existing database and import sales orders from an Excel file.
+
+Excel columns required: OrderNumber, CustomerName, PONumber, DateReceived, DateBilled
+
+OrderNumber format: 576001-CMN001-00
+- BaseToken: 576001
+- QualifierCode: CM (first 2 chars after dash)
+- SystemLetter: N (letter after qualifier)
+- SequenceNo: 001 (3 digits)
+- BackorderNo: 00 (last part)
+
+===============================================================================
+STEP 1: Import Excel to temporary table
+===============================================================================
+
+1. Backup your database first!
+2. External Data -> New Data Source -> From File -> Excel
+3. Select your .xlsx file
+4. Import to a new table named "tblImport"
+5. Let Access create the primary key (it won't affect import)
+6. Make sure column names match: OrderNumber, CustomerName, PONumber, DateReceived, DateBilled
+
+===============================================================================
+STEP 2: Create basDataImport module
+===============================================================================
+
+Create a new Standard Module named "basDataImport" and paste this code:
+
+Option Compare Database
+Option Explicit
+
+Public Sub ImportLegacySalesOrders()
+    On Error GoTo EH
+
+    Dim db As DAO.Database
+    Dim rs As DAO.Recordset
+    Dim rsNew As DAO.Recordset
+    Dim rsEntry As DAO.Recordset
+
+    Dim orderNum As String
+    Dim parts() As String
+    Dim baseToken As String
+    Dim qualPart As String
+    Dim qualifierCode As String
+    Dim systemLetter As String
+    Dim seqNo As Long
+    Dim backorderNo As Long
+    Dim newSOID As Long
+    Dim importCount As Long
+
+    Set db = CurrentDb
+
+    ' STEP 1: Confirm before clearing
+    If MsgBox("This will DELETE all existing orders and import from tblImport." & vbCrLf & vbCrLf & _
+              "Make sure you have:" & vbCrLf & _
+              "1. Backed up your database" & vbCrLf & _
+              "2. Imported your Excel file to a table named 'tblImport'" & vbCrLf & vbCrLf & _
+              "Continue?", vbYesNo + vbExclamation, "Confirm Import") = vbNo Then
+        Exit Sub
+    End If
+
+    ' STEP 2: Clear existing data
+    db.Execute "DELETE FROM SalesOrderEntry;", dbFailOnError
+    db.Execute "DELETE FROM SalesOrders;", dbFailOnError
+    db.Execute "DELETE FROM OrderSeq;", dbFailOnError  ' Reset sequences
+
+    ' STEP 3: Open import table
+    Set rs = db.OpenRecordset("SELECT * FROM tblImport", dbOpenSnapshot)
+
+    If rs.EOF Then
+        MsgBox "No records found in tblImport.", vbExclamation
+        GoTo Cleanup
+    End If
+
+    Set rsNew = db.OpenRecordset("SalesOrders", dbOpenDynaset, dbSeeChanges)
+    Set rsEntry = db.OpenRecordset("SalesOrderEntry", dbOpenDynaset, dbSeeChanges)
+
+    importCount = 0
+
+    Do While Not rs.EOF
+        orderNum = Nz(rs!OrderNumber, "")
+
+        If Len(orderNum) > 0 Then
+            ' Parse OrderNumber: 576001-CMN001-00
+            parts = Split(orderNum, "-")
+
+            If UBound(parts) >= 2 Then
+                ' BaseToken = first part
+                baseToken = parts(0)
+
+                ' QualPart = second part (e.g., CMN001)
+                qualPart = parts(1)
+
+                ' Parse qualPart: first 2 chars = QualifierCode, next char = SystemLetter, last 3 = SeqNo
+                ' Adjust if your format differs
+                If Len(qualPart) >= 6 Then
+                    qualifierCode = Left(qualPart, 2)
+                    systemLetter = Mid(qualPart, 3, 1)
+                    seqNo = CLng(Right(qualPart, 3))
+                Else
+                    qualifierCode = Left(qualPart, 2)
+                    systemLetter = ""
+                    seqNo = 1
+                End If
+
+                ' BackorderNo = third part
+                backorderNo = CInt(parts(2))
+
+                ' Insert into SalesOrders
+                rsNew.AddNew
+                    rsNew!OrderType = "SALES"  ' Adjust if needed
+                    rsNew!BaseToken = baseToken
+                    rsNew!SystemLetter = systemLetter
+                    rsNew!BackorderNo = backorderNo
+                    rsNew!CustomerName = rs!CustomerName
+                    rsNew!PONumber = rs!PONumber
+                    rsNew!DateReceived = rs!DateReceived
+                    rsNew!DateBilled = rs!DateBilled
+                    rsNew!ActiveFlag = True
+                    rsNew!OrderNumber = orderNum
+                    rsNew!DateCreated = Now()
+                rsNew.Update
+
+                rsNew.Bookmark = rsNew.LastModified
+                newSOID = rsNew!SOID
+
+                ' Insert into SalesOrderEntry
+                rsEntry.AddNew
+                    rsEntry!SOID = newSOID
+                    rsEntry!QualifierCode = qualifierCode
+                    rsEntry!SequenceNo = seqNo
+                    rsEntry!IsDeleted = False
+                    rsEntry!CreatedOn = Now()
+                    rsEntry!OrderNumberDisplay = orderNum
+                rsEntry.Update
+
+                importCount = importCount + 1
+            End If
+        End If
+
+        rs.MoveNext
+    Loop
+
+    MsgBox "Import complete!" & vbCrLf & vbCrLf & _
+           "Records imported: " & importCount, vbInformation
+
+Cleanup:
+    On Error Resume Next
+    If Not rs Is Nothing Then rs.Close
+    If Not rsNew Is Nothing Then rsNew.Close
+    If Not rsEntry Is Nothing Then rsEntry.Close
+    Set rs = Nothing
+    Set rsNew = Nothing
+    Set rsEntry = Nothing
+    Set db = Nothing
+    Exit Sub
+
+EH:
+    MsgBox "Import error: " & Err.Description, vbCritical
+    Resume Cleanup
+End Sub
+
+===============================================================================
+STEP 3: Run the import
+===============================================================================
+
+1. Press Ctrl+G to open Immediate Window
+2. Type: ImportLegacySalesOrders
+3. Press Enter
+4. Confirm the prompt
+5. Wait for completion message
+
+===============================================================================
+STEP 4: Clean up
+===============================================================================
+
+1. Delete tblImport when done
+2. Test that orders display correctly in frmOrderList
+3. Verify order counts match your Excel file
+
+===============================================================================
+NOTES
+===============================================================================
+
+- All imported orders are set to OrderType = "SALES"
+- If you have PROJECT orders, modify the code or import them separately
+- The OrderSeq table is cleared, so sequence numbers will restart fresh
+- CustomerCode is not imported (not in your Excel) - will be Null
