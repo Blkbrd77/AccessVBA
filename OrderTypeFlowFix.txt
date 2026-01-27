@@ -1,0 +1,139 @@
+ORDER TYPE FLOW FIX - dlgNewOrderType
+======================================
+
+Issue: "The form name 'dlgProjectSelection' is misspelled or refers to a form that doesn't exist"
+Issue: "Sub or function not found" on Me.subProjectPicker.Visible or Me.btnProjOrdNext
+
+Root Cause: Old code still in Form_dlgNewOrderType trying to open dlgProjectSelection,
+and missing buttons on the form.
+
+===============================================================================
+STEP 1: Add missing buttons to dlgNewOrderType
+===============================================================================
+
+Open dlgNewOrderType in Design View and add TWO buttons:
+
+Button 1:
+  Name:     btnProjOrdNext
+  Caption:  Next
+  Visible:  No
+  Position: Near the subProjectPicker subform area
+
+Button 2:
+  Name:     btnCancel
+  Caption:  Cancel
+  Visible:  Yes
+  Position: Bottom of form
+
+===============================================================================
+STEP 2: Replace ALL code in Form_dlgNewOrderType
+===============================================================================
+
+Open the form's code module (Alt+F11 or View Code).
+DELETE all existing code and paste this:
+
+Option Compare Database
+Option Explicit
+
+Private Sub Form_Open(Cancel As Integer)
+    ' Start with project picker hidden
+    Me.subProjectPicker.Visible = False
+    Me.btnProjOrdNext.Visible = False
+    Me.btnProjOrdNext.Enabled = False
+End Sub
+
+Private Sub btnSalesOrder_Click()
+    On Error GoTo EH
+
+    Dim nextBase As Long
+    nextBase = NextSalesBaseToken()
+
+    If nextBase = 0 Then
+        MsgBox "Could not generate next Sales base token.", vbExclamation
+        Exit Sub
+    End If
+
+    Dim args As String
+    args = "SALES:" & CStr(nextBase) & ":P"
+
+    DoCmd.Close acForm, Me.Name, acSaveNo
+
+    DoCmd.OpenForm _
+        FormName:="dlgBatchGenerateOrders", _
+        WindowMode:=acDialog, _
+        OpenArgs:=args
+
+    Exit Sub
+
+EH:
+    MsgBox "Error opening Sales order: " & Err.Description, vbExclamation
+End Sub
+
+Private Sub btnProjectOrder_Click()
+    On Error GoTo EH
+
+    Me.subProjectPicker.Visible = True
+    Me.btnProjOrdNext.Visible = True
+    Me.btnProjOrdNext.Enabled = False
+
+    Me.btnSalesOrder.Visible = False
+    Me.btnProjectOrder.Visible = False
+
+    Exit Sub
+
+EH:
+    MsgBox "Error showing project selection: " & Err.Description, vbExclamation
+End Sub
+
+Private Sub btnProjOrdNext_Click()
+    On Error GoTo EH
+
+    Dim selBase As String
+    selBase = Me.subProjectPicker.Form.GetSelectedProject()
+
+    If Len(selBase) = 0 Then
+        MsgBox "Please select a project.", vbExclamation
+        Exit Sub
+    End If
+
+    Dim args As String
+    args = "PROJECT:" & selBase & ":"
+
+    DoCmd.Close acForm, Me.Name, acSaveNo
+
+    DoCmd.OpenForm _
+        FormName:="dlgBatchGenerateOrders", _
+        WindowMode:=acDialog, _
+        OpenArgs:=args
+
+    Exit Sub
+
+EH:
+    MsgBox "Error opening Project order: " & Err.Description, vbExclamation
+End Sub
+
+Private Sub btnCancel_Click()
+    DoCmd.Close acForm, Me.Name, acSaveNo
+End Sub
+
+===============================================================================
+CHECKLIST
+===============================================================================
+
+Form Controls on dlgNewOrderType:
+[ ] btnSalesOrder - EXISTS (Caption: "Sales Order")
+[ ] btnProjectOrder - EXISTS (Caption: "Project Order")
+[ ] subProjectPicker - EXISTS (SourceObject: Form.fsubProjectPicker, Visible: No)
+[ ] btnProjOrdNext - ADD THIS (Caption: "Next", Visible: No)
+[ ] btnCancel - ADD THIS (Caption: "Cancel", Visible: Yes)
+
+Code Module Form_dlgNewOrderType:
+[ ] Form_Open - hides subProjectPicker and btnProjOrdNext
+[ ] btnSalesOrder_Click - calls NextSalesBaseToken, opens dlgBatchGenerateOrders
+[ ] btnProjectOrder_Click - shows subProjectPicker and btnProjOrdNext, hides type buttons
+[ ] btnProjOrdNext_Click - gets selected project, opens dlgBatchGenerateOrders
+[ ] btnCancel_Click - closes form
+
+Supporting Forms:
+[ ] fsubProjectPicker - EXISTS with cboProjectSelect and GetSelectedProject function
+[ ] dlgBatchGenerateOrders - EXISTS, needs Form_Open to parse OpenArgs (see OrderTypeFlowFeature.txt Step 5)
