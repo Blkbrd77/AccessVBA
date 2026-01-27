@@ -1,27 +1,41 @@
 LEGACY DATA IMPORT FROM EXCEL
 ==============================
 
-Purpose: Clear existing database and import sales orders from an Excel file.
+Purpose: Import data from legacy Q1019 database into new structure.
 
-Excel columns required: OrderNumber, CustomerName, PONumber, DateReceived, DateBilled
+LEGACY STRUCTURE:
+- SalesOrders: OrderNumber (Long), CustomerName, PONumber, DateReceived, DateBilled
+- SalesOrderQualifier: SOQID, OrderNumber (FK), QualifierCode, SequenceNo, DerivedOrderID, CreatedOn, Notes, IsDeleted, DeletedOn, DeletedReason
 
-OrderNumber format: 576001-CMN001-00
-- BaseToken: 576001
-- QualifierCode: CM (first 2 chars after dash)
-- SystemLetter: N (letter after qualifier)
-- SequenceNo: 001 (3 digits)
-- BackorderNo: 00 (last part)
+NEW STRUCTURE:
+- SalesOrders: SOID, OrderType, BaseToken, SystemLetter, BackorderNo, CustomerName, PONumber, DateReceived, DateBilled, OrderNumber, etc.
+- SalesOrderEntry: SOEntryID, SOID, QualifierCode, SequenceNo, OrderNumberDisplay, IsDeleted, CreatedOn
+
+TWO EXCEL FILES REQUIRED:
+
+1. Export legacy SalesOrders to Excel, import as "tblImportOrders":
+   Columns: OrderNumber, CustomerName, PONumber, DateReceived, DateBilled
+
+2. Export legacy SalesOrderQualifier to Excel, import as "tblImportQualifiers":
+   Columns: SOQID, OrderNumber, QualifierCode, SequenceNo, DerivedOrderID, CreatedOn, Notes, IsDeleted, DeletedOn, DeletedReason
 
 ===============================================================================
-STEP 1: Import Excel to temporary table
+STEP 1: Import Excel files to temporary tables
 ===============================================================================
 
-1. Backup your database first!
-2. External Data -> New Data Source -> From File -> Excel
-3. Select your .xlsx file
-4. Import to a new table named "tblImport"
-5. Let Access create the primary key (it won't affect import)
-6. Make sure column names match: OrderNumber, CustomerName, PONumber, DateReceived, DateBilled
+1. Backup your NEW database first!
+
+2. Import Sales Orders Excel:
+   - External Data -> New Data Source -> From File -> Excel
+   - Select your sales orders .xlsx file
+   - Import to a new table named "tblImportOrders"
+   - Let Access create the primary key
+
+3. Import Qualifiers Excel:
+   - External Data -> New Data Source -> From File -> Excel
+   - Select your qualifiers .xlsx file
+   - Import to a new table named "tblImportQualifiers"
+   - Let Access create the primary key
 
 ===============================================================================
 STEP 2: Create basDataImport module
@@ -32,32 +46,37 @@ Create a new Standard Module named "basDataImport" and paste this code:
 Option Compare Database
 Option Explicit
 
-Public Sub ImportLegacySalesOrders()
+' Dictionary to map legacy OrderNumber (Long) to new SOID
+Private dictOrderMap As Object
+
+Public Sub ImportLegacyData()
     On Error GoTo EH
 
     Dim db As DAO.Database
-    Dim rs As DAO.Recordset
+    Dim rsOrders As DAO.Recordset
+    Dim rsQual As DAO.Recordset
     Dim rsNew As DAO.Recordset
     Dim rsEntry As DAO.Recordset
 
-    Dim orderNum As String
-    Dim parts() As String
+    Dim legacyOrderNum As Long
     Dim baseToken As String
-    Dim qualPart As String
-    Dim qualifierCode As String
-    Dim systemLetter As String
-    Dim seqNo As Long
+    Dim derivedOrder As String
     Dim backorderNo As Long
     Dim newSOID As Long
-    Dim importCount As Long
+    Dim orderCount As Long
+    Dim qualCount As Long
+    Dim parts() As String
 
     Set db = CurrentDb
+    Set dictOrderMap = CreateObject("Scripting.Dictionary")
 
     ' STEP 1: Confirm before clearing
-    If MsgBox("This will DELETE all existing orders and import from tblImport." & vbCrLf & vbCrLf & _
+    If MsgBox("This will DELETE all existing orders and import from:" & vbCrLf & vbCrLf & _
+              "- tblImportOrders (sales orders)" & vbCrLf & _
+              "- tblImportQualifiers (order qualifiers)" & vbCrLf & vbCrLf & _
               "Make sure you have:" & vbCrLf & _
               "1. Backed up your database" & vbCrLf & _
-              "2. Imported your Excel file to a table named 'tblImport'" & vbCrLf & vbCrLf & _
+              "2. Imported both Excel files" & vbCrLf & vbCrLf & _
               "Continue?", vbYesNo + vbExclamation, "Confirm Import") = vbNo Then
         Exit Sub
     End If
@@ -65,96 +84,126 @@ Public Sub ImportLegacySalesOrders()
     ' STEP 2: Clear existing data
     db.Execute "DELETE FROM SalesOrderEntry;", dbFailOnError
     db.Execute "DELETE FROM SalesOrders;", dbFailOnError
-    db.Execute "DELETE FROM OrderSeq;", dbFailOnError  ' Reset sequences
+    db.Execute "DELETE FROM OrderSeq;", dbFailOnError
 
-    ' STEP 3: Open import table
-    Set rs = db.OpenRecordset("SELECT * FROM tblImport", dbOpenSnapshot)
+    ' STEP 3: Import Sales Orders (headers)
+    Set rsOrders = db.OpenRecordset("SELECT * FROM tblImportOrders", dbOpenSnapshot)
 
-    If rs.EOF Then
-        MsgBox "No records found in tblImport.", vbExclamation
+    If rsOrders.EOF Then
+        MsgBox "No records found in tblImportOrders.", vbExclamation
         GoTo Cleanup
     End If
 
     Set rsNew = db.OpenRecordset("SalesOrders", dbOpenDynaset, dbSeeChanges)
-    Set rsEntry = db.OpenRecordset("SalesOrderEntry", dbOpenDynaset, dbSeeChanges)
 
-    importCount = 0
+    orderCount = 0
 
-    Do While Not rs.EOF
-        orderNum = Nz(rs!OrderNumber, "")
+    Do While Not rsOrders.EOF
+        legacyOrderNum = Nz(rsOrders!OrderNumber, 0)
 
-        If Len(orderNum) > 0 Then
-            ' Parse OrderNumber: 576001-CMN001-00
-            parts = Split(orderNum, "-")
+        If legacyOrderNum > 0 Then
+            ' BaseToken = legacy OrderNumber as text
+            baseToken = CStr(legacyOrderNum)
 
-            If UBound(parts) >= 2 Then
-                ' BaseToken = first part
-                baseToken = parts(0)
+            ' Insert into SalesOrders (one record per legacy order)
+            rsNew.AddNew
+                rsNew!OrderType = "SALES"
+                rsNew!BaseToken = baseToken
+                rsNew!SystemLetter = "P"           ' Default for legacy
+                rsNew!BackorderNo = 0              ' Will update per qualifier if needed
+                rsNew!CustomerName = rsOrders!CustomerName
+                rsNew!PONumber = rsOrders!PONumber
+                rsNew!DateReceived = rsOrders!DateReceived
+                rsNew!DateBilled = rsOrders!DateBilled
+                rsNew!ActiveFlag = True
+                rsNew!OrderNumber = ""             ' Will set from first qualifier
+                rsNew!DateCreated = Now()
+            rsNew.Update
 
-                ' QualPart = second part (e.g., CMN001)
-                qualPart = parts(1)
+            rsNew.Bookmark = rsNew.LastModified
+            newSOID = rsNew!SOID
 
-                ' Parse qualPart: first 2 chars = QualifierCode, next char = SystemLetter, last 3 = SeqNo
-                ' Adjust if your format differs
-                If Len(qualPart) >= 6 Then
-                    qualifierCode = Left(qualPart, 2)
-                    systemLetter = Mid(qualPart, 3, 1)
-                    seqNo = CLng(Right(qualPart, 3))
-                Else
-                    qualifierCode = Left(qualPart, 2)
-                    systemLetter = ""
-                    seqNo = 1
-                End If
+            ' Map legacy OrderNumber to new SOID
+            dictOrderMap(legacyOrderNum) = newSOID
 
-                ' BackorderNo = third part
-                backorderNo = CInt(parts(2))
-
-                ' Insert into SalesOrders
-                rsNew.AddNew
-                    rsNew!OrderType = "SALES"  ' Adjust if needed
-                    rsNew!BaseToken = baseToken
-                    rsNew!SystemLetter = systemLetter
-                    rsNew!BackorderNo = backorderNo
-                    rsNew!CustomerName = rs!CustomerName
-                    rsNew!PONumber = rs!PONumber
-                    rsNew!DateReceived = rs!DateReceived
-                    rsNew!DateBilled = rs!DateBilled
-                    rsNew!ActiveFlag = True
-                    rsNew!OrderNumber = orderNum
-                    rsNew!DateCreated = Now()
-                rsNew.Update
-
-                rsNew.Bookmark = rsNew.LastModified
-                newSOID = rsNew!SOID
-
-                ' Insert into SalesOrderEntry
-                rsEntry.AddNew
-                    rsEntry!SOID = newSOID
-                    rsEntry!QualifierCode = qualifierCode
-                    rsEntry!SequenceNo = seqNo
-                    rsEntry!IsDeleted = False
-                    rsEntry!CreatedOn = Now()
-                    rsEntry!OrderNumberDisplay = orderNum
-                rsEntry.Update
-
-                importCount = importCount + 1
-            End If
+            orderCount = orderCount + 1
         End If
 
-        rs.MoveNext
+        rsOrders.MoveNext
+    Loop
+
+    rsOrders.Close
+    Set rsOrders = Nothing
+    rsNew.Close
+    Set rsNew = Nothing
+
+    Debug.Print "Orders imported: " & orderCount
+
+    ' STEP 4: Import Qualifiers -> SalesOrderEntry
+    Set rsQual = db.OpenRecordset("SELECT * FROM tblImportQualifiers ORDER BY OrderNumber, DerivedOrderID", dbOpenSnapshot)
+
+    If rsQual.EOF Then
+        MsgBox "No records found in tblImportQualifiers." & vbCrLf & _
+               "Orders imported: " & orderCount, vbExclamation
+        GoTo Cleanup
+    End If
+
+    Set rsEntry = db.OpenRecordset("SalesOrderEntry", dbOpenDynaset, dbSeeChanges)
+
+    qualCount = 0
+
+    Do While Not rsQual.EOF
+        legacyOrderNum = Nz(rsQual!OrderNumber, 0)
+        derivedOrder = Nz(rsQual!DerivedOrderID, "")
+
+        If legacyOrderNum > 0 And dictOrderMap.Exists(legacyOrderNum) Then
+            newSOID = dictOrderMap(legacyOrderNum)
+
+            ' Parse BackorderNo from DerivedOrderID (e.g., "576001-CMN001-00")
+            backorderNo = 0
+            If Len(derivedOrder) > 0 Then
+                parts = Split(derivedOrder, "-")
+                If UBound(parts) >= 2 Then
+                    backorderNo = CInt(parts(UBound(parts)))
+                End If
+            End If
+
+            ' Insert into SalesOrderEntry
+            rsEntry.AddNew
+                rsEntry!SOID = newSOID
+                rsEntry!QualifierCode = rsQual!QualifierCode
+                rsEntry!SequenceNo = Nz(rsQual!SequenceNo, 0)
+                rsEntry!IsDeleted = Nz(rsQual!IsDeleted, False)
+                rsEntry!CreatedOn = Nz(rsQual!CreatedOn, Now())
+                rsEntry!OrderNumberDisplay = derivedOrder
+            rsEntry.Update
+
+            ' Update SalesOrders with first OrderNumber and BackorderNo
+            UpdateOrderHeader newSOID, derivedOrder, backorderNo
+
+            qualCount = qualCount + 1
+        Else
+            Debug.Print "Warning: No matching order for qualifier OrderNumber: " & legacyOrderNum
+        End If
+
+        rsQual.MoveNext
     Loop
 
     MsgBox "Import complete!" & vbCrLf & vbCrLf & _
-           "Records imported: " & importCount, vbInformation
+           "Orders imported: " & orderCount & vbCrLf & _
+           "Qualifiers imported: " & qualCount, vbInformation
 
 Cleanup:
     On Error Resume Next
-    If Not rs Is Nothing Then rs.Close
+    If Not rsOrders Is Nothing Then rsOrders.Close
+    If Not rsQual Is Nothing Then rsQual.Close
     If Not rsNew Is Nothing Then rsNew.Close
     If Not rsEntry Is Nothing Then rsEntry.Close
-    Set rs = Nothing
+    Set rsOrders = Nothing
+    Set rsQual = Nothing
     Set rsNew = Nothing
     Set rsEntry = Nothing
+    Set dictOrderMap = Nothing
     Set db = Nothing
     Exit Sub
 
@@ -163,29 +212,83 @@ EH:
     Resume Cleanup
 End Sub
 
+Private Sub UpdateOrderHeader(ByVal SOID As Long, ByVal DerivedOrder As String, ByVal BackorderNo As Long)
+    ' Update SalesOrders with OrderNumber if not already set
+    On Error Resume Next
+
+    Dim db As DAO.Database
+    Dim rs As DAO.Recordset
+
+    Set db = CurrentDb
+    Set rs = db.OpenRecordset("SELECT * FROM SalesOrders WHERE SOID=" & SOID, dbOpenDynaset, dbSeeChanges)
+
+    If Not rs.EOF Then
+        ' Only update if OrderNumber is empty (first qualifier for this order)
+        If Len(Nz(rs!OrderNumber, "")) = 0 Then
+            rs.Edit
+                rs!OrderNumber = DerivedOrder
+                rs!BackorderNo = BackorderNo
+            rs.Update
+        End If
+    End If
+
+    rs.Close
+    Set rs = Nothing
+    Set db = Nothing
+End Sub
+
 ===============================================================================
 STEP 3: Run the import
 ===============================================================================
 
 1. Press Ctrl+G to open Immediate Window
-2. Type: ImportLegacySalesOrders
+2. Type: ImportLegacyData
 3. Press Enter
 4. Confirm the prompt
 5. Wait for completion message
+6. Check Immediate Window for any warnings
 
 ===============================================================================
 STEP 4: Clean up
 ===============================================================================
 
-1. Delete tblImport when done
-2. Test that orders display correctly in frmOrderList
-3. Verify order counts match your Excel file
+1. Delete tblImportOrders when done
+2. Delete tblImportQualifiers when done
+3. Test that orders display correctly in frmOrderList
+4. Verify counts match your legacy database
+
+===============================================================================
+FIELD MAPPING
+===============================================================================
+
+tblImportOrders (legacy SalesOrders) -> NEW SalesOrders:
+  OrderNumber (Long)  -> BaseToken (Text), used to link qualifiers
+  CustomerName        -> CustomerName
+  PONumber            -> PONumber
+  DateReceived        -> DateReceived
+  DateBilled          -> DateBilled
+  (default)           -> OrderType = "SALES"
+  (default)           -> SystemLetter = "P"
+  (default)           -> ActiveFlag = True
+
+tblImportQualifiers (legacy SalesOrderQualifier) -> NEW SalesOrderEntry:
+  OrderNumber         -> (lookup SOID via dictionary)
+  QualifierCode       -> QualifierCode
+  SequenceNo          -> SequenceNo
+  DerivedOrderID      -> OrderNumberDisplay, also parsed for BackorderNo
+  CreatedOn           -> CreatedOn
+  IsDeleted           -> IsDeleted
+  Notes               -> (not imported)
+  DeletedOn           -> (not imported)
+  DeletedReason       -> (not imported)
 
 ===============================================================================
 NOTES
 ===============================================================================
 
-- All imported orders are set to OrderType = "SALES"
-- If you have PROJECT orders, modify the code or import them separately
-- The OrderSeq table is cleared, so sequence numbers will restart fresh
-- CustomerCode is not imported (not in your Excel) - will be Null
+- Legacy OrderNumber (Long like 576001) becomes BaseToken (Text "576001")
+- All orders set to OrderType = "SALES" and SystemLetter = "P"
+- BackorderNo parsed from DerivedOrderID (last segment after final dash)
+- First qualifier's DerivedOrderID becomes the SalesOrders.OrderNumber
+- OrderSeq table is cleared - sequences restart fresh for new orders
+- Check Immediate Window (Ctrl+G) for any warning messages
