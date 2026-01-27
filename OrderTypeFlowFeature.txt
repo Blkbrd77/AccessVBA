@@ -1,0 +1,373 @@
+ORDER TYPE SELECTION FLOW FEATURE
+=================================
+
+Feature: New order flow with Sales vs Project path selection.
+
+FLOW:
+1. User opens frmOrderList
+2. Clicks cmdReserveNumbers
+3. dlgNewOrderType opens
+4. PATH 1 - SALES: btnSalesOrder -> dlgBatchGenerateOrders (pre-filled, locked)
+5. PATH 2 - PROJECT: btnProjectOrder -> show project picker -> btnProjOrdNext -> dlgBatchGenerateOrders
+
+===============================================================================
+STEP 1: Modify cmdReserveNumbers_Click in Form_frmOrderList
+===============================================================================
+
+Replace the existing cmdReserveNumbers_Click with this version that opens
+dlgNewOrderType instead of dlgBatchGenerateOrders directly:
+
+Private Sub cmdReserveNumbers_Click()
+    On Error GoTo EH
+
+    Trace "Launcher: opening order type chooser"
+
+    ' Clear any prior status from older runs
+    TempClear "BatchResult", "BatchErr", "BatchID", "CreatedCount"
+    TempClear "OrderTypeSelection", "SelectedBaseToken", "SelectedSystemLetter"
+
+    ' Open the order type chooser modally
+    DoCmd.OpenForm "dlgNewOrderType", WindowMode:=acDialog
+
+    Trace "Launcher: after order type dialog returned"
+
+    ' Check result via TempVars (set by dlgBatchGenerateOrders when commit succeeds)
+    Dim res As String
+    res = Nz(TV("BatchResult", ""), "")
+
+    Select Case res
+
+    Case "Committed"
+        Trace "Launcher: success branch"
+
+        Me.FilterOn = False
+        Me.Filter = vbNullString
+
+        Dim sBatch As String
+        sBatch = Nz(TV("BatchID", ""), "")
+
+        If Len(sBatch) > 0 Then
+            mBatchFilter = "BatchID='" & Replace(sBatch, "'", "''") & "'"
+        Else
+            mBatchFilter = vbNullString
+        End If
+
+        RefreshPage
+
+        On Error Resume Next
+        Me.Recordset.MoveFirst
+        On Error GoTo 0
+
+        Me.Requery
+
+    Case "Error"
+        Trace "Launcher: error branch"
+        MsgBox "Commit failed: " & Nz(TV("BatchErr", "(unknown)"), "(unknown)"), vbCritical
+
+    Case "Canceled", ""
+        Trace "Launcher: canceled/no-status branch"
+        Me.Requery
+
+    End Select
+
+    ClearHandledError "frmOrderList.AfterDialog"
+    Exit Sub
+
+EH:
+    MsgBox "Open wizard failed: " & Err.Number & " - " & Err.Description, vbExclamation
+End Sub
+
+===============================================================================
+STEP 2: Modify dlgNewOrderType form design
+===============================================================================
+
+Add/modify these controls in Design View:
+
+EXISTING CONTROLS (keep):
+- btnSalesOrder (Command Button) - Caption: "Sales Order"
+- btnProjectOrder (Command Button) - Caption: "Project Order"
+
+ADD NEW CONTROLS:
+- subProjectPicker (Subform) - SourceObject: Form.fsubProjectPicker
+    - Visible: No (initially hidden)
+    - Position below the buttons
+
+- btnProjOrdNext (Command Button) - Caption: "Next"
+    - Visible: No (initially hidden)
+    - Position next to subform
+
+- btnCancel (Command Button) - Caption: "Cancel"
+    - Always visible
+
+===============================================================================
+STEP 3: Create fsubProjectPicker subform
+===============================================================================
+
+Create a new form named "fsubProjectPicker" with:
+
+Properties:
+    Default View: Single Form
+    Record Selectors: No
+    Navigation Buttons: No
+    Scroll Bars: Neither
+
+Controls:
+    - lblSelectProject (Label) - Caption: "Select Project:"
+    - cboProjectSelect (ComboBox)
+        Row Source Type: Table/Query
+        Row Source: SELECT BaseToken, Program, JobCode3 FROM Projects WHERE ActiveFlag=True ORDER BY BaseToken;
+        Column Count: 3
+        Column Widths: 1";2";1"
+        Bound Column: 1
+        Limit To List: Yes
+
+Code Module (Form_fsubProjectPicker):
+
+Option Compare Database
+Option Explicit
+
+Private Sub Form_Load()
+    Me.cboProjectSelect = Null
+End Sub
+
+Private Sub cboProjectSelect_AfterUpdate()
+    ' Enable the Next button on parent form when selection is made
+    If Nz(Me.cboProjectSelect, "") <> "" Then
+        Me.Parent.btnProjOrdNext.Enabled = True
+    Else
+        Me.Parent.btnProjOrdNext.Enabled = False
+    End If
+End Sub
+
+Public Function GetSelectedProject() As String
+    GetSelectedProject = Nz(Me.cboProjectSelect, "")
+End Function
+
+===============================================================================
+STEP 4: Replace Form_dlgNewOrderType code module
+===============================================================================
+
+Option Compare Database
+Option Explicit
+
+Private Sub Form_Open(Cancel As Integer)
+    ' Start with project picker hidden
+    Me.subProjectPicker.Visible = False
+    Me.btnProjOrdNext.Visible = False
+    Me.btnProjOrdNext.Enabled = False
+End Sub
+
+Private Sub btnSalesOrder_Click()
+    On Error GoTo EH
+
+    ' PATH 1: SALES ORDER
+    ' Get next BaseToken and default SystemLetter
+    Dim nextBase As Long
+    nextBase = NextSalesBaseToken()
+
+    If nextBase = 0 Then
+        MsgBox "Could not generate next Sales base token.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Build OpenArgs: "SALES:576045:P"
+    ' Format: OrderType:BaseToken:DefaultSystemLetter
+    Dim args As String
+    args = "SALES:" & CStr(nextBase) & ":P"
+
+    ' Close this dialog first, then open batch generator
+    DoCmd.Close acForm, Me.Name, acSaveNo
+
+    DoCmd.OpenForm _
+        FormName:="dlgBatchGenerateOrders", _
+        WindowMode:=acDialog, _
+        OpenArgs:=args
+
+    Exit Sub
+
+EH:
+    MsgBox "Error opening Sales order: " & Err.Description, vbExclamation
+End Sub
+
+Private Sub btnProjectOrder_Click()
+    On Error GoTo EH
+
+    ' PATH 2: PROJECT ORDER - Show project picker
+    Me.subProjectPicker.Visible = True
+    Me.btnProjOrdNext.Visible = True
+    Me.btnProjOrdNext.Enabled = False
+
+    ' Hide the type buttons
+    Me.btnSalesOrder.Visible = False
+    Me.btnProjectOrder.Visible = False
+
+    Exit Sub
+
+EH:
+    MsgBox "Error showing project selection: " & Err.Description, vbExclamation
+End Sub
+
+Private Sub btnProjOrdNext_Click()
+    On Error GoTo EH
+
+    ' Get selected project from subform
+    Dim selBase As String
+    selBase = Me.subProjectPicker.Form.GetSelectedProject()
+
+    If Len(selBase) = 0 Then
+        MsgBox "Please select a project.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Build OpenArgs: "PROJECT:TAGO25:"
+    ' Format: OrderType:BaseToken:DefaultSystemLetter (blank for project)
+    Dim args As String
+    args = "PROJECT:" & selBase & ":"
+
+    ' Close this dialog first, then open batch generator
+    DoCmd.Close acForm, Me.Name, acSaveNo
+
+    DoCmd.OpenForm _
+        FormName:="dlgBatchGenerateOrders", _
+        WindowMode:=acDialog, _
+        OpenArgs:=args
+
+    Exit Sub
+
+EH:
+    MsgBox "Error opening Project order: " & Err.Description, vbExclamation
+End Sub
+
+Private Sub btnCancel_Click()
+    DoCmd.Close acForm, Me.Name, acSaveNo
+End Sub
+
+===============================================================================
+STEP 5: Modify Form_dlgBatchGenerateOrders to handle OpenArgs
+===============================================================================
+
+Update the Form_Open event to parse OpenArgs and lock fields:
+
+Private Sub Form_Open(Cancel As Integer)
+    On Error GoTo EH
+
+    Trace "Dialog.Open"
+
+    ' Parse OpenArgs: "OrderType:BaseToken:DefaultSystemLetter"
+    Dim oa As String
+    oa = Nz(Me.OpenArgs, "")
+
+    If Len(oa) > 0 Then
+        Dim parts() As String
+        parts = Split(oa, ":")
+
+        ' Part 0: OrderType (SALES or PROJECT)
+        If UBound(parts) >= 0 Then
+            Me.cboOrderType = parts(0)
+            Me.cboOrderType.Locked = True
+            Me.cboOrderType.Enabled = False  ' Gray out to show locked
+        End If
+
+        ' Part 1: BaseToken
+        If UBound(parts) >= 1 Then
+            Me.txtBaseToken = parts(1)
+            Me.txtBaseToken.Locked = True
+            Me.txtBaseToken.Enabled = False  ' Gray out to show locked
+        End If
+
+        ' Part 2: Default SystemLetter (optional)
+        If UBound(parts) >= 2 And Len(parts(2)) > 0 Then
+            Me.cboSystemLetter = parts(2)
+            ' SystemLetter remains unlocked for user to change
+        End If
+    End If
+
+    ' Bind preview list
+    Me.lstPreview.RowSource = "SELECT OrderNumber FROM tmpBatchPreview ORDER BY OrderNumber;"
+
+    ' Clear old data
+    Reset_Qty_From_Qualifiers True
+
+    Exit Sub
+
+EH:
+    MsgBox "Dialog open failed: " & Err.Description, vbExclamation
+    Cancel = True
+End Sub
+
+===============================================================================
+STEP 6: Ensure helper functions exist
+===============================================================================
+
+These should already exist in your codebase (verify in basSequence or similar):
+
+- NextSalesBaseToken() - Returns next SALES BaseToken (e.g., 576045)
+- DefaultSalesSystemLetter() - Returns "P"
+- TempClear() - Clears multiple TempVars
+- TV() - TempVars helper
+- Trace() - Debug logging
+
+===============================================================================
+SUMMARY OF CHANGES
+===============================================================================
+
+1. frmOrderList.cmdReserveNumbers_Click
+   - Now opens dlgNewOrderType instead of dlgBatchGenerateOrders directly
+
+2. dlgNewOrderType (form design)
+   - Add subProjectPicker subform (hidden initially)
+   - Add btnProjOrdNext button (hidden initially)
+   - Add btnCancel button
+
+3. fsubProjectPicker (new subform)
+   - ComboBox for project selection
+   - Enables Next button when project selected
+
+4. Form_dlgNewOrderType (code)
+   - btnSalesOrder_Click: Opens batch generator with SALES:BaseToken:P
+   - btnProjectOrder_Click: Shows project picker
+   - btnProjOrdNext_Click: Opens batch generator with PROJECT:BaseToken:
+   - btnCancel_Click: Closes form
+
+5. Form_dlgBatchGenerateOrders.Form_Open
+   - Parses OpenArgs (OrderType:BaseToken:SystemLetter)
+   - Sets and locks cboOrderType
+   - Sets and locks txtBaseToken
+   - Sets default cboSystemLetter (if provided)
+
+===============================================================================
+OPENARGS FORMAT
+===============================================================================
+
+Format: "OrderType:BaseToken:DefaultSystemLetter"
+
+Examples:
+- SALES:  "SALES:576045:P"
+- PROJECT: "PROJECT:TAGO25:"
+
+===============================================================================
+USER EXPERIENCE
+===============================================================================
+
+PATH 1 - SALES ORDER:
+1. Click "Reserve Numbers" on frmOrderList
+2. dlgNewOrderType opens
+3. Click "Sales Order"
+4. dlgBatchGenerateOrders opens with:
+   - Order Type: SALES (locked, grayed out)
+   - Base Token: 576045 (locked, grayed out, auto-generated)
+   - System Letter: P (default, can change)
+5. Add qualifiers, preview, commit
+
+PATH 2 - PROJECT ORDER:
+1. Click "Reserve Numbers" on frmOrderList
+2. dlgNewOrderType opens
+3. Click "Project Order"
+4. Project picker appears, type buttons hide
+5. Select project from dropdown (e.g., TAGO25)
+6. Click "Next"
+7. dlgBatchGenerateOrders opens with:
+   - Order Type: PROJECT (locked, grayed out)
+   - Base Token: TAGO25 (locked, grayed out)
+   - System Letter: (blank, user must select)
+8. Add qualifiers, preview, commit
