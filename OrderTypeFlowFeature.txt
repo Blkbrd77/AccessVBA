@@ -48,8 +48,10 @@ Private Sub cmdReserveNumbers_Click()
 
         If Len(sBatch) > 0 Then
             mBatchFilter = "BatchID='" & Replace(sBatch, "'", "''") & "'"
+            Me.Caption = "Order List (Filtered to Batch)"
         Else
             mBatchFilter = vbNullString
+            Me.Caption = "Order List"
         End If
 
         RefreshPage
@@ -58,7 +60,7 @@ Private Sub cmdReserveNumbers_Click()
         Me.Recordset.MoveFirst
         On Error GoTo 0
 
-        Me.Requery
+        ' Form_Current fires automatically on MoveFirst, updating selection display
 
     Case "Error"
         Trace "Launcher: error branch"
@@ -371,3 +373,15 @@ PATH 2 - PROJECT ORDER:
    - Base Token: TAGO25 (locked, grayed out)
    - System Letter: (blank, user must select)
 8. Add qualifiers, preview, commit
+
+===============================================================================
+INTEGRATION WITH OTHER FEATURES
+===============================================================================
+
+This feature works with:
+
+- CurrentSelectionDisplay.txt: Form_Current fires automatically when navigating
+  to new records after commit, updating the selection display bar.
+
+- cmdFormReset: User can click "Reset / Show All" to clear the batch filter
+  and return to full order list view.
