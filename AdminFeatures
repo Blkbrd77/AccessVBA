@@ -1,0 +1,542 @@
+Below is your **Admin Portal Build Specification** for Microsoft Access—designed as a step‑by‑step, implementation‑ready document. It reflects your choices and best‑practice defaults, with clear wiring, guardrails, and drop‑in VBA patterns so you can build each screen confidently.
+
+***
+
+## 1) Objective & Scope
+
+Create an **Admin Portal** for trusted admins to:
+
+*   Maintain **lookup tables**: `QualifierTypes`, `SystemLetter`
+*   Maintain **master data**: `Customer`, `Projects`
+*   Perform **sensitive SalesOrder edits** (Qualifier/SystemLetter only), plus add/deactivate orders
+*   Run **maintenance jobs** (compact/repair backend, relink, cleanup)
+*   Run **imports** (Excel/CSV with validation & logs)
+*   View **error logs** and run **diagnostics/health checks**
+
+> **Key principle:** Operational safety via soft deletes (Active flags), strict validation, audit trail, and admin‑only controls.
+
+***
+
+## 2) Roles & Security
+
+### 2.1 User Model
+
+Create table: **`tblUsers`**
+
+*   `UserName` (Text, PK or unique) — Windows login (e.g., `DOMAIN\jsamples`)
+*   `IsAdmin` (Yes/No)
+*   `IsActive` (Yes/No, default Yes)
+*   `DisplayName` (Text, optional)
+
+**Helper Function (modSecurity):**
+
+```vba
+Public Function CurrentUserName() As String
+    CurrentUserName = Environ$("USERNAME")
+End Function
+
+Public Function IsAdmin() As Boolean
+    IsAdmin = (DCount("*", "tblUsers", "UserName=" & Chr$(34) & Environ$("USERNAME") & Chr$(34) & " AND IsActive=TRUE AND IsAdmin=TRUE") > 0)
+End Function
+```
+
+**Form‑level guard:**
+
+*   On `Admin` forms’ `On Load`: If `Not IsAdmin` then `Cancel = True`.
+*   At control level, set `Enabled`/`Locked` based on `IsAdmin`.
+
+***
+
+## 3) Navigation & Layout (Top-Level UI)
+
+Use a **Navigation Form with Tabs** (Pattern **D**):
+
+**Form:** `frmAdminNav`
+
+*   **Tabs & Embedded Subforms**
+    1.  **Lookup Tables**
+        *   `sub_QualifierTypes_Split` (Pattern **B**)
+        *   `sub_SystemLetter_Split` (Pattern **B**)
+    2.  **Master Data**
+        *   `sub_Customers_Split` (Pattern **B**)
+        *   `sub_Projects_Split` (Pattern **B**)
+    3.  **Sales Orders**
+        *   List form `sub_SalesOrderList` + button **Edit (Modal)** → `dlgSalesOrderEdit` (Pattern **C**)
+        *   Button **Create Sales Order (Admin)** → `wizCreateSalesOrder`
+    4.  **Maintenance**
+        *   Buttons: **Relink Tables**, **Compact/Repair Backend**, **Cleanup**, **Rebuild Temp**
+        *   Status grid: `MaintenanceLog`
+    5.  **Imports**
+        *   Buttons: **Import Customers**, **Import Projects**, **Import QualifierTypes**, etc.
+        *   Recent import runs & errors grid
+    6.  **Diagnostics**
+        *   Health checks list, **Run Checks** button, **ErrorLog** viewer, **Export** button
+
+> Navigation form hides complexity while keeping each functional area isolated and testable.
+
+***
+
+## 4) Table-by-Table Admin Specs
+
+### 4.1 QualifierTypes (Lookup)
+
+*   **Permissions:** Add = Yes | Edit = **No** | Delete = Soft (ActiveFlag)
+*   **UI:** Split Form (datasheet + single) — Pattern **B**
+*   **Fields (typical):**
+    *   `QualifierCode` (Text, unique, **locked after save**)
+    *   `QualifierName` (Text)
+    *   `Description` (Memo)
+    *   `ActiveFlag` (Yes/No)
+    *   `CreatedAt`/`CreatedBy` (Timestamp/Text)
+    *   `ModifiedAt`/`ModifiedBy` (Timestamp/Text)
+*   **Validation:**
+    *   Require `QualifierCode`, `QualifierName`
+    *   Enforce unique `QualifierCode`
+*   **Filters/Search:**
+    *   Quick search: Code, Name
+    *   Filter: Active/Inactive
+    *   Sort: Active first, then Code
+*   **Soft Delete:** Toggle `ActiveFlag`; warn if referenced.
+
+### 4.2 SystemLetter (Lookup)
+
+*   **Permissions:** Add = Yes | Edit = Yes | Delete = Soft (IsActive)
+*   **UI:** Split Form — Pattern **B**
+*   **Fields (typical):**
+    *   `SystemLetter` (Text, **prefer single char** like “P”; unique; lock after save)
+    *   `Description` (Text)
+    *   `IsActive` (Yes/No)
+    *   Audit fields as above
+*   **Validation:**
+    *   Require `SystemLetter`, `Description`
+    *   Enforce unique `SystemLetter`
+    *   Optionally enforce `Len(SystemLetter)=1`
+*   **Search/Filter/Sort:** As lookup defaults
+
+### 4.3 Customer (Master)
+
+*   **Permissions:** Add = Yes | Edit = Yes | Delete = Soft (IsActive)
+*   **UI:** Split Form — Pattern **B**
+*   **Fields (typical):**
+    *   `CustomerID` (PK, Autonumber)
+    *   `CustomerCode` (Text, unique)
+    *   `CustomerName` (Text, required)
+    *   `IsActive` (Yes/No)
+    *   Contact fields as needed
+    *   Audit fields
+*   **Validation:**
+    *   Unique `CustomerCode`
+    *   Required `CustomerName`, `CustomerCode`
+*   **Search/Filter/Sort:**
+    *   Search on Code/Name; Filter Active; Sort Name A→Z
+
+### 4.4 Projects (Master)
+
+*   **Permissions:** Add = Yes | Edit = Yes | Delete = Soft (IsActive)
+*   **UI:** Split Form — Pattern **B**
+*   **Fields (typical):**
+    *   `ProjectID` (PK)
+    *   `ProjectCode` (Text, unique)
+    *   `ProjectName` (Text, required)
+    *   `Program` (Text/Lookup)
+    *   `IsActive` (Yes/No)
+    *   Audit fields
+*   **Search/Filter/Sort:**
+    *   Search Name/Code; Filter Active, Program; Sort Program then Name
+
+***
+
+## 5) Sales Orders — Admin Editor (Sensitive)
+
+### 5.1 Permissions
+
+*   **Editable fields:** **QualifierCode**, **SystemLetter**
+*   **Add New SalesOrder:** **Yes** (Admin wizard)
+*   **Delete:** **Soft** via `ActiveFlag`
+*   **Edit Allowed Only for Admin:** enforced in modal `dlgSalesOrderEdit`
+
+### 5.2 Numbering Rules (enforced)
+
+Unified format:
+
+    <BaseToken>-<QualifierCode><SystemLetter><SeqNNN>-<BackorderNo>
+
+*   Sales default `SystemLetter='P'` unless overridden
+*   **SeqNNN**: 3‑digit sequence (001–999)
+*   **BackorderNo**: starts at `00`, increments only for backorders
+*   **Edits must not break format**; if order has backorders, changing Qualifier/SystemLetter is **blocked** (with admin override path requiring a reason)
+
+### 5.3 Modal Editor `dlgSalesOrderEdit`
+
+*   **Header:** OrderNumber (read‑only), ActiveFlag toggle, Created/Modified, Customer/Project display (read‑only)
+*   **Editable fields:**
+    *   `QualifierCode` (Combo) — list from `QualifierTypes` where `ActiveFlag=TRUE`
+    *   `SystemLetter` (Combo) — list from `SystemLetter` where `IsActive=TRUE`
+*   **Buttons:** Save, Cancel, **View Audit**, **Revert Last Change**
+*   **Warnings:**
+    *   If changing either field → show strong warning, require **Change Reason** (textbox)
+*   **Search/Filters (list form before modal):**
+    *   Search: OrderNumber, Customer, Project
+    *   Filter: Active, SystemLetter, Qualifier
+    *   Sort: CreatedDate DESC
+
+### 5.4 Validation Flow (Before Update)
+
+1.  Confirm admin (`IsAdmin`)
+2.  If changing Qualifier/SystemLetter:
+    *   Validate selection exists & active
+    *   If has backorders → block unless **Override** chosen
+    *   Enforce numbering format (rebuild display if necessary)
+3.  Require **Change Reason** for any change
+4.  Write to **AuditTrail** (see §7)
+5.  Save
+
+***
+
+## 6) Soft Delete / Deactivate Pattern
+
+**UI:** Replace deletes with a **Toggle Active** button.
+
+**Reusable procedure (modSoftDelete):**
+
+```vba
+Public Sub ToggleActive(ByVal TableName As String, ByVal PKField As String, ByVal PKValue As Variant, _
+                        ByVal ActiveField As String, ByVal OnCaption As String, ByVal OffCaption As String, _
+                        Optional ByVal Reason As String = "")
+    Dim rs As DAO.Recordset
+    Dim sql As String, wasActive As Boolean
+
+    sql = "SELECT " & ActiveField & " FROM " & TableName & " WHERE " & PKField & "=" & Nz(PKValue, 0)
+    Set rs = CurrentDb.OpenRecordset(sql, dbOpenDynaset)
+    If rs.EOF Then Err.Raise vbObjectError + 1001, , "Record not found."
+
+    wasActive = Nz(rs.Fields(0).Value, False)
+    rs.Edit
+    rs.Fields(0).Value = Not wasActive
+    rs.Update
+    rs.Close
+
+    ' Audit this toggle
+    AuditFieldChange TableName, PKField, PKValue, ActiveField, wasActive, Not wasActive, Reason
+
+    MsgBox IIf(wasActive, OffCaption, OnCaption) & " successful.", vbInformation
+End Sub
+```
+
+> Call from buttons with:  
+> `ToggleActive "Customer", "CustomerID", Me.CustomerID, "IsActive", "Activated", "Deactivated", "Admin toggle"`.
+
+***
+
+## 7) Audit & Rollback Design
+
+### 7.1 Tables
+
+*   **`AuditTrail`**
+    *   `AuditID` (PK, AutoNumber)
+    *   `TableName` (Text)
+    *   `RecordPK` (Text) — normalize to text for flexibility
+    *   `FieldName` (Text)
+    *   `OldValue` (Text)
+    *   `NewValue` (Text)
+    *   `ChangedBy` (Text, Windows user)
+    *   `ChangedAt` (Date/Time, Now())
+    *   `Reason` (Memo)
+    *   `UIContext` (Text, e.g., `dlgSalesOrderEdit`)
+
+*   **`MaintenanceLog`**
+    *   `RunID` (PK), `JobName`, `RunAt`, `RunBy`, `Status` (Success/Fail), `Details` (Memo)
+
+*   **`ImportRun` / `ImportErrorLog`**
+    *   `ImportRun`: `RunID`, `ImportType`, `FilePath`, `RunAt`, `RunBy`, `TotalRows`, `Inserted`, `Updated`, `Errors`
+    *   `ImportErrorLog`: `RunID`, `RowNum`, `FieldName`, `ErrorMessage`, `RawData`
+
+*   **`ErrorLog`**
+    *   `ErrorID`, `OccurredAt`, `UserName`, `Source`, `ErrNumber`, `ErrDescription`, `Details` (stack/context)
+
+### 7.2 Reusable Audit Writer (modAudit)
+
+```vba
+Public Sub AuditFieldChange(ByVal TableName As String, ByVal PKField As String, ByVal PKValue As Variant, _
+                            ByVal FieldName As String, ByVal OldVal As Variant, ByVal NewVal As Variant, _
+                            Optional ByVal Reason As String = "", Optional ByVal UIContext As String = "")
+    If Nz(OldVal, "") = Nz(NewVal, "") Then Exit Sub
+
+    Dim rs As DAO.Recordset, sql As String
+    sql = "SELECT * FROM AuditTrail WHERE 1=0"
+    Set rs = CurrentDb.OpenRecordset(sql, dbOpenDynaset)
+    rs.AddNew
+    rs!TableName = TableName
+    rs!RecordPK = CStr(PKValue)
+    rs!FieldName = FieldName
+    rs!OldValue = Nz(OldVal, "")
+    rs!NewValue = Nz(NewVal, "")
+    rs!ChangedBy = Environ$("USERNAME")
+    rs!ChangedAt = Now()
+    rs!Reason = Reason
+    rs!UIContext = UIContext
+    rs.Update
+    rs.Close
+End Sub
+```
+
+### 7.3 Rollback (Revert Last Change)
+
+*   Button on `dlgSalesOrderEdit`: **Revert Last Change**
+*   Logic: Query latest `AuditTrail` entries for record; apply reverse update; write new audit entries tagged `Rollback`.
+*   **Note:** Limit to last N minutes or last change group to avoid incoherent reversions.
+
+***
+
+## 8) Maintenance Jobs (Tab)
+
+Buttons with confirmations and logging:
+
+1.  **Relink Tables**
+
+    *   Iterate `CurrentDb.TableDefs` with `.Connect` strings
+    *   If disconnected or BE path moved, prompt for new location, update connect, `RefreshLink`
+    *   Log to `MaintenanceLog`
+
+    ```vba
+    Public Sub RelinkAll()
+        Dim tdf As DAO.TableDef
+        For Each tdf In CurrentDb.TableDefs
+            If Len(tdf.Connect) > 0 Then
+                On Error Resume Next
+                tdf.RefreshLink
+                If Err.Number <> 0 Then
+                    ' handle missing backend selection here
+                End If
+                On Error GoTo 0
+            End If
+        Next
+        ' Log run
+    End Sub
+    ```
+
+2.  **Compact/Repair Backend**
+    *   If using split FE/BE (recommended), run `DBEngine.CompactDatabase` on BE path to a temp file, replace on success.
+    *   Log status.
+
+3.  **Cleanup Tasks**
+    *   Examples:
+        *   Deactivate Customers/Projects with no activity in X months (reviewed, not auto)
+        *   Remove orphan rows in staging tables
+    *   Always prompt; write `MaintenanceLog`.
+
+4.  **Rebuild Temp / Recalc**
+    *   Rebuild cached lookup snapshots if you keep any local.
+
+***
+
+## 9) Imports (Tab)
+
+### 9.1 Flow
+
+1.  **Download template** (optional button): Excel with correct headers.
+2.  **Pick File** (FileDialog) → load to **staging table** (`stg_Customers`, etc.).
+3.  **Validate** staged rows (uniqueness, required fields, referential checks).
+4.  **Preview Errors** in subform (rows that will fail, with reasons).
+5.  **Commit** → insert/update target tables in a transaction.
+6.  **Summarize** → show counts, write `ImportRun` + `ImportErrorLog`.
+
+### 9.2 Sample Import (Customers) Skeleton
+
+```vba
+Public Sub ImportCustomers(ByVal FilePath As String)
+    Dim db As DAO.Database: Set db = CurrentDb
+    Dim tr As DAO.Workspace: Set tr = DBEngine.Workspaces(0)
+    Dim runId As Long
+
+    ' 1) Load to staging
+    DoCmd.SetWarnings False
+    DoCmd.TransferSpreadsheet acImport, acSpreadsheetTypeExcel12Xml, _
+        "stg_Customers", FilePath, True
+    DoCmd.SetWarnings True
+
+    ' 2) Validate (write errors to ImportErrorLog with runId)
+    ' ... your DLookups / DCounts / FK checks here ...
+
+    ' 3) Commit in transaction
+    tr.BeginTrans
+    On Error GoTo FAIL
+
+    ' Upsert pattern example:
+    ' - If CustomerCode exists -> Update
+    ' - Else Insert
+    ' - Always audit changes
+
+    tr.CommitTrans
+    ' Write ImportRun summary
+    Exit Sub
+FAIL:
+    tr.Rollback
+    ' Log ImportRun failure + error
+    Err.Raise Err.Number, , Err.Description
+End Sub
+```
+
+***
+
+## 10) Diagnostics (Tab)
+
+### 10.1 Health Checks
+
+*   **Broken Links:** Attempt `OpenRecordset TOP 1` on each linked table; report failures
+*   **Missing Indexes:** Check expected unique indexes on Code fields
+*   **RI Orphans (best‑effort):** DCount child rows referencing missing parents
+*   **Version Drift:** FE/BE version stamp comparison (optional)
+
+**UI:** Run button → populates a list control with results and severity.  
+**Export:** Button → export to Excel.
+
+### 10.2 Error Logs Viewer
+
+*   Subform bound to `ErrorLog`
+*   Filters: Date range, User
+*   Sort: Newest first
+*   Buttons: **Export to Excel**, **Copy Row**
+
+**Centralized error logging helper (modErrors):**
+
+```vba
+Public Sub LogError(ByVal Source As String, ByVal ErrNum As Long, ByVal ErrDesc As String, Optional ByVal Details As String = "")
+    Dim rs As DAO.Recordset
+    Set rs = CurrentDb.OpenRecordset("ErrorLog", dbOpenDynaset)
+    rs.AddNew
+    rs!OccurredAt = Now()
+    rs!UserName = Environ$("USERNAME")
+    rs!Source = Source
+    rs!ErrNumber = ErrNum
+    rs!ErrDescription = Left$(ErrDesc, 255)
+    rs!Details = Details
+    rs.Update
+    rs.Close
+End Sub
+```
+
+***
+
+## 11) Form Wiring Details (Per Screen)
+
+### 11.1 Split Forms (QualifierTypes, SystemLetter, Customer, Projects)
+
+*   **Form property:** `Default View = Split Form`
+*   **Datasheet:** Lock PK/Code columns; allow sort/filter
+*   **Buttons bar:** Add, Toggle Active, Save, Refresh, View Audit
+*   **Before Update:** Validate required fields & uniqueness (DCount)
+*   **After Update:** Write audit entries (loop through changed fields if you track pre/post values)
+
+**Uniqueness check example (Before Update):**
+
+```vba
+If DCount("*", "Customer", "CustomerCode=" & Chr(34) & Me.CustomerCode & Chr(34) & " AND CustomerID <> " & Nz(Me.CustomerID, 0)) > 0 Then
+    MsgBox "CustomerCode must be unique.", vbExclamation
+    Cancel = True
+    Exit Sub
+End If
+```
+
+### 11.2 Sales Orders
+
+*   **List form:** Filters + search; double‑click row or press **Edit** to open modal
+*   **Modal:** `Popup=True`, `Modal=True`; only **QualifierCode** and **SystemLetter** are editable
+*   **Change Reason:** required when any editable field changes
+*   **Deactivation:** Toggle `ActiveFlag` with warning & audit
+
+***
+
+## 12) Search, Filters, Sorting (Locked as Best Practice)
+
+*   **Lookup tables:** Quick search on Code/Name; Active filter; sort Active first, then Code
+*   **Customer:** Search Code/Name; Active filter; sort Name
+*   **Projects:** Search Name/Code; filters Program, Active; sort Program → Name
+*   **Sales Orders List:** Search OrderNumber/Customer/Project; filters Active, SystemLetter, Qualifier; sort CreatedDate DESC
+*   **ErrorLog:** Search text; filters Date range, User; sort Newest first
+
+> Implement quick search with a single textbox filtering a form’s `Filter` property (build with `LIKE '*' & txt & '*'` across key fields).
+
+***
+
+## 13) Deployment & Safety
+
+*   **Split FE/BE**: Front‑end (forms, queries, VBA) per user; back‑end (tables) on a network share
+*   **Relinking:** Keep a `tblAppConfig` with `BackendPath`; use Maintenance → Relink
+*   **Backups:** Schedule BE backups before imports or maintenance
+*   **Ribbon:** You can keep the full ribbon for Admin Portal; hide for end‑user UI if desired
+*   **Record locking:** Use optimistic locking; include `ModifiedAt` timestamp to detect concurrent edits
+
+***
+
+## 14) Naming Conventions
+
+*   Forms: `frmAdminNav`, `sub_<Area>_Split`, `dlg<Thing>Edit`, `wiz<CreateThing>`
+*   Tables: `AuditTrail`, `MaintenanceLog`, `ImportRun`, `ImportErrorLog`, `ErrorLog`, `tblUsers`
+*   Modules: `modSecurity`, `modAudit`, `modSoftDelete`, `modErrors`, `modMaintenance`, `modImport`
+*   Queries: `qry<Area>_<Purpose>` (e.g., `qryCustomers_Active`)
+
+***
+
+## 15) Testing & Acceptance Checklist
+
+**Lookup Tables**
+
+*   [ ] Add new QualifierType & SystemLetter
+*   [ ] QualifierTypes are **not editable**; deactivation audits correctly
+*   [ ] Unique code enforcement works
+
+**Master Data**
+
+*   [ ] Add/Edit Customer & Projects
+*   [ ] Soft delete toggles and audit entries created
+*   [ ] Search/filters function and persist while navigating
+
+**Sales Orders**
+
+*   [ ] Only Admin can open modal edit
+*   [ ] Change to Qualifier/SystemLetter requires reason; blocks on backorders unless override chosen
+*   [ ] Revert Last Change undoes most recent modification safely
+*   [ ] New SalesOrder wizard creates valid numbers per scheme
+
+**Maintenance**
+
+*   [ ] Relink works when BE path changes
+*   [ ] Compact/Repair backend completes and logs status
+*   [ ] Cleanup prompts and logs
+
+**Imports**
+
+*   [ ] Staging loads correctly from template
+*   [ ] Validation catches bad rows; errors display with reasons
+*   [ ] Commit writes audit entries for updates
+
+**Diagnostics**
+
+*   [ ] Health checks catch broken links / missing indexes
+*   [ ] ErrorLog viewer filters by date/user and exports
+
+***
+
+## 16) Next Steps (I can generate these for you)
+
+1.  **Data definitions** for `AuditTrail`, `MaintenanceLog`, `ImportRun`, `ImportErrorLog`, `ErrorLog`, `tblUsers` (CREATE TABLE statements or Access table design spec)
+2.  **Form stubs**:
+    *   `frmAdminNav` with tabs and embedded subforms
+    *   `sub_QualifierTypes_Split` and `sub_SystemLetter_Split` with command bars
+    *   `sub_Customers_Split`, `sub_Projects_Split`
+    *   `sub_SalesOrderList` + `dlgSalesOrderEdit` + `wizCreateSalesOrder`
+3.  **Drop‑in modules** (copy/paste):
+    *   `modSecurity`, `modAudit`, `modSoftDelete`, `modErrors`, `modMaintenance`, `modImport`
+4.  **Quick Search helper** that builds form filters reliably
+5.  **Rollback procedure** specialized for SalesOrder
+
+***
+
+### Want me to generate the first set of **drop‑in modules** and the **QualifierTypes Split Form** event code next (copy/paste ready)?
+
+If yes, tell me which you want first:
+
+*   **A)** Module set (`modSecurity`, `modAudit`, `modSoftDelete`, `modErrors`)
+*   **B)** `sub_QualifierTypes_Split` with full event code (validations, audit hooks, soft delete)
+*   **C)** `dlgSalesOrderEdit` (modal) with validation + audit + reason + rollback skeleton
