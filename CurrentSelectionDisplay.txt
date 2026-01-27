@@ -1,0 +1,169 @@
+CURRENT SELECTION DISPLAY + FORM RESET FOR frmOrderList
+========================================================
+
+Features:
+1. Yellow bar at top showing currently selected order
+2. Reset button to clear filters and refresh form
+
+===============================================================================
+STEP 1: Add controls to Form Header in Design View
+===============================================================================
+
+Open frmOrderList in Design View.
+If Form Header isn't visible: View -> Form Header/Footer
+
+ADD TEXTBOX - Current Selection Display:
+  Name:           txtCurrentSelection
+  Control Source: (leave blank)
+  Locked:         Yes
+  Enabled:        No
+  Back Color:     Light Yellow (RGB: 255, 255, 192 or pick from palette)
+  Fore Color:     Black
+  Font Weight:    Bold
+  Font Size:      10
+  Width:          4 inches
+  Height:         0.3 inches
+  Border Style:   Solid
+  Text Align:     Left
+
+ADD COMMAND BUTTON - Reset Form:
+  Name:           cmdFormReset
+  Caption:        Reset / Show All
+  Width:          1.2 inches
+  Height:         0.3 inches
+  OnClick:        [Event Procedure]
+
+Position txtCurrentSelection on the left, cmdFormReset on the right of the header.
+
+===============================================================================
+STEP 2: Add code to Form_frmOrderList module
+===============================================================================
+
+Add these procedures to the form's code module:
+
+'--------------------------------------------
+' Form_Current - Updates selection display when navigating records
+'--------------------------------------------
+Private Sub Form_Current()
+    On Error Resume Next
+
+    If Me.NewRecord Then
+        Me.txtCurrentSelection = "No order selected"
+    ElseIf IsNull(Me!SOID) Or Me!SOID = 0 Then
+        Me.txtCurrentSelection = "No order selected"
+    ElseIf IsNull(Me!OrderNumber) Or Len(Nz(Me!OrderNumber, "")) = 0 Then
+        Me.txtCurrentSelection = "Selected: SOID " & Me!SOID & " (no order number)"
+    Else
+        Me.txtCurrentSelection = "Selected: " & Me!OrderNumber & _
+            IIf(Len(Nz(Me!CustomerName, "")) > 0, " - " & Me!CustomerName, "")
+    End If
+End Sub
+
+'--------------------------------------------
+' cmdFormReset_Click - Clears filters and resets form to default view
+'--------------------------------------------
+Private Sub cmdFormReset_Click()
+    On Error GoTo EH
+
+    Trace "FormReset: clearing filters"
+
+    ' Clear form-level filter
+    Me.Filter = ""
+    Me.FilterOn = False
+
+    ' Clear batch filter (module-level variable)
+    mBatchFilter = ""
+
+    ' Reset paging to first page
+    mlngStartRow = 1
+    mlngEndRow = PAGE_SIZE
+
+    ' Refresh the form
+    RefreshPage
+
+    ' Move to first record
+    On Error Resume Next
+    Me.Recordset.MoveFirst
+    On Error GoTo EH
+
+    ' Update selection display
+    Form_Current
+
+    ' Update caption to show unfiltered
+    Me.Caption = "Order List"
+
+    Trace "FormReset: complete"
+    Exit Sub
+
+EH:
+    MsgBox "Reset failed: " & Err.Description, vbExclamation
+End Sub
+
+===============================================================================
+STEP 3: Update Form_Load to initialize selection display
+===============================================================================
+
+Find your existing Form_Load procedure and add the Form_Current call:
+
+Private Sub Form_Load()
+    RefreshPage
+
+    ' Initialize selection display
+    Form_Current
+End Sub
+
+If Form_Load doesn't exist, create it with the code above.
+
+===============================================================================
+STEP 4: Update Form_Open to initialize selection display (optional)
+===============================================================================
+
+If you have a Form_Open event, you can also initialize there:
+
+Private Sub Form_Open(Cancel As Integer)
+    mlngStartRow = 1
+    mlngEndRow = PAGE_SIZE
+    mBatchFilter = ""
+End Sub
+
+===============================================================================
+USAGE
+===============================================================================
+
+Current Selection Display:
+- Automatically updates as you navigate through records
+- Shows: "Selected: 576001-CMN001-00 - ACME Corp"
+- Shows: "No order selected" when on new record or empty
+
+Reset / Show All Button:
+- Clears any active filters (including batch filter from commits/backorders)
+- Resets paging to first page
+- Returns to full order list view
+- Updates form caption to "Order List"
+
+===============================================================================
+VISUAL LAYOUT EXAMPLE
+===============================================================================
+
++------------------------------------------------------------------+
+| FORM HEADER                                                       |
+|                                                                   |
+|  [Selected: 576001-CMN001-00 - ACME Corp    ] [Reset / Show All] |
+|                                                                   |
++------------------------------------------------------------------+
+| DETAIL (Continuous Form)                                          |
+|  OrderNumber  | CustomerName  | PONumber | DateReceived | ...     |
+|  -------------|---------------|----------|--------------|----     |
+|  576001-CM... | ACME Corp     | PO-1234  | 1/15/2026    | ...     |
+|  576001-CM... | Beta Inc      | PO-5678  | 1/16/2026    | ...     |
++------------------------------------------------------------------+
+
+===============================================================================
+NOTES
+===============================================================================
+
+- The Form_Current event fires automatically when navigating records
+- mBatchFilter is a module-level variable already defined in your form
+- PAGE_SIZE, mlngStartRow, mlngEndRow are existing paging variables
+- RefreshPage is your existing procedure that rebuilds RecordSource
+- Trace is your existing debug logging function (optional)
