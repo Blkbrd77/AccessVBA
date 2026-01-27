@@ -9,9 +9,34 @@ Cause: When IsPreview = True, ReserveSeq returns the current sequence without in
 
 Solution: Track sequence offsets locally during preview.
 
-In basBatchWizard module, replace the BuildPreview subroutine with this:
+===============================================================================
+STEP 1: Update cmdPreview_Click in Form_dlgBatchGenerateOrders
+===============================================================================
 
--------------------------------------------------------------------------------
+Private Sub cmdPreview_Click()
+    MsgBox "Preview button clicked!"   ' <-- DEBUG: Confirm button responds
+    On Error GoTo EH
+
+    Dim Scope As String, baseT As String, sysLet As String
+    If Not ValidateHeader(Scope, baseT, sysLet) Then Exit Sub
+    If Not HasAnyQty() Then
+        MsgBox "Enter at least one quantity > 0.", vbExclamation
+        Exit Sub
+    End If
+
+    Trace "Dialog.Preview: start"
+    BuildPreview                        ' <-- UNCOMMENTED (no parameters)
+    Me.lstPreview.Requery
+    Trace "Dialog.Preview: done"
+    Exit Sub
+
+EH:
+    MsgBox "Preview failed: " & Err.Description, vbExclamation
+End Sub
+
+===============================================================================
+STEP 2: Replace BuildPreview in basBatchWizard module
+===============================================================================
 
 Public Sub BuildPreview()
     On Error GoTo EH
@@ -101,15 +126,12 @@ EH:
     MsgBox "Preview failed: " & Err.Description, vbExclamation
 End Sub
 
--------------------------------------------------------------------------------
+===============================================================================
+STEP 3: Add txtBackOrderNo control to dlgBatchGenerateOrders form
+===============================================================================
 
-Also required: Add a txtBackOrderNo textbox control to the dlgBatchGenerateOrders form
-               (with default value of 0).
+Add a TextBox named "txtBackOrderNo" to the form with a default value of 0.
 
-Also required: In Form_dlgBatchGenerateOrders, uncomment the BuildPreview call:
-               Change: 'BuildPreview Scope, baseT, sysLet
-               To:     BuildPreview
-
--------------------------------------------------------------------------------
-DEBUG VERSION: This version includes MsgBox statements to help diagnose issues.
-Remove the MsgBox lines once the preview is working correctly.
+===============================================================================
+DEBUG VERSION: Remove MsgBox statements once preview is working correctly.
+===============================================================================
