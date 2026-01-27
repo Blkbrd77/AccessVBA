@@ -1,0 +1,103 @@
+Database Inventory Report
+Generated: 1/26/2026 8:13:55 PM
+Database: C:\Users\JaySamples\OneDrive - HOSE-MCCANN COMMUNICATIONS\Documents\Access Databases\Q-1019\Backups\Q1019Log_Demo.accdb
+================================================================================
+
+
+TABLES
+----------------------------------------
+
+Table: QualifierType
+  Type: Local
+  Fields:
+    - QualifierCode	10 (10) [Required]
+    - QualifierName	10 (100)
+    - RequiresSequence	1 (1) [Required]
+    - SequenceWidth	4 (4) [Required]
+    - AllowMultiple	1 (1) [Required]
+    - FormatSeparator	10 (5) [Required]
+    - ActiveFlag	1 (1) [Required]
+    - Notes	12 (0)
+
+Table: SalesOrderEntry
+  Type: Local
+  Fields:
+    - SOEntryID	4 (4)
+    - OrderNumberDisplay	10 (30) [Required]
+    - OrderNumberBase	4 (4) [Required]
+    - CustomerName	10 (100) [Required]
+    - PONumber	10 (50)
+    - DateReceived	8 (8) [Required] [Default: =Date()]
+    - QualifierCode	10 (10)
+    - SequenceNo	4 (4)
+    - CreatedOn	8 (8) [Required]
+    - IsDeleted	1 (1) [Required] [Default: 0]
+
+Table: SalesOrderQualifier
+  Type: Local
+  Fields:
+    - SOQID	4 (4)
+    - OrderNumber	4 (4) [Required]
+    - QualifierCode	10 (10) [Required]
+    - SequenceNo	4 (4) [Required]
+    - DerivedOrderID	10 (30) [Required]
+    - CreatedOn	8 (8) [Required] [Default: =Date()]
+    - Notes	12 (0)
+    - IsDeleted	1 (1) [Required]
+    - DeletedOn	8 (8) [Default: =Now()]
+    - DeletedReason	10 (255)
+
+Table: SalesOrderQualifierAudit
+  Type: Local
+  Fields:
+    - SOQAuditID	4 (4)
+    - SOQID	4 (4) [Required]
+    - OrderNumber	4 (4) [Required]
+    - QualifierCode	10 (10) [Required]
+    - SequenceNo	4 (4) [Required]
+    - Action	10 (20) [Required]
+    - ActionBy	10 (50)
+    - ActionOn	8 (8) [Required] [Default: =Now()]
+    - Reason	10 (255)
+
+Table: SalesOrders
+  Type: Local
+  Fields:
+    - OrderNumber	4 (4)
+    - CustomerName	10 (100)
+    - PONumber	10 (50)
+    - DateReceived	8 (8)
+    - DateBilled	8 (8)
+
+================================================================================
+
+QUERIES
+----------------------------------------
+
+Query: qryOrderList_Ledger
+  SQL:
+  SELECT SalesOrderEntry.OrderNumberDisplay, SalesOrderEntry.CustomerName, SalesOrderEntry.PONumber, SalesOrderEntry.DateReceived, SalesOrderEntry.OrderNumberBase, SalesOrderEntry.IsDeleted
+  FROM SalesOrderEntry
+  WHERE (((SalesOrderEntry.IsDeleted) In (Yes,No)))
+  ORDER BY SalesOrderEntry.OrderNumberBase, SalesOrderEntry.OrderNumberDisplay;
+  
+
+================================================================================
+
+FORMS
+----------------------------------------
+Form: frmOrderList  (Modified: 1/15/2026 2:20:24 PM)
+Form: frmSalesOrderEntry  (Modified: 1/14/2026 11:52:13 AM)
+Form: dlgAddQualifiers  (Modified: 1/13/2026 1:08:38 PM)
+
+REPORTS
+----------------------------------------
+
+MODULES
+----------------------------------------
+Module: modMain  (Modified: 1/26/2026 8:09:52 PM)
+Module: GenerateDatabaseInventory  (Modified: 1/26/2026 8:09:52 PM)
+Module: SeedTestData_QualifierAndLedger  (Modified: 1/26/2026 8:09:52 PM)
+Module: basQuickExport  (Modified: 1/26/2026 8:09:52 PM)
+
+End of Report
