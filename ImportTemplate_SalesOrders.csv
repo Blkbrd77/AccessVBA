@@ -1,0 +1,6 @@
+OrderNumber,OrderType,BaseToken,SystemLetter,BackorderNo,CustomerName,CustomerCode,PONumber,DateReceived,DateBilled,ActiveFlag,BatchID,DateCreated,DateBackorderCreated,DateCanceled,CancelReason,CanceledBy
+"576001-CMN001-00","SALES","576001","P",0,"Sample Customer Inc","SMPL01","PO-12345","2025-01-15","2025-01-20",True,"","2025-01-15","","","",""
+"576001-CEN001-00","SALES","576001","P",0,"Sample Customer Inc","SMPL01","PO-12345","2025-01-15","",True,"","2025-01-15","","","",""
+"576002-CMN001-00","SALES","576002","N",0,"Another Client LLC","ANTH01","PO-99887","2025-01-18","",True,"","2025-01-18","","","",""
+"576002-CMN001-01","SALES","576002","N",1,"Another Client LLC","ANTH01","PO-99887","2025-01-18","",True,"","2025-01-25","2025-01-25","","",""
+"TAGO25-EL001-00","PROJECT","TAGO25","J",0,"Project Client Corp","PROJ01","","2025-02-01","",True,"batch-guid-here","2025-02-01","","","",""
