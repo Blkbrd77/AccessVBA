@@ -1,0 +1,407 @@
+================================================================================
+SOFT DELETE FEATURE SPECIFICATION
+frmOrderList - Cancel/Restore Orders with Visual Indicators
+================================================================================
+
+OVERVIEW
+--------
+This feature adds soft delete (cancel) functionality to SalesOrders from
+frmOrderList, with visual cues for canceled orders and filter options to
+show/hide them.
+
+Features:
+- Cancel Order button with reason prompt
+- Restore Order button to undo cancellations
+- Filter option group: Active / Canceled / All Orders
+- "CANCELED" status column with red text indicator
+- Qualifier Description column added to order list
+
+
+================================================================================
+EXISTING DATABASE SCHEMA (No Changes Required)
+================================================================================
+
+TABLE: SalesOrders
+------------------
+Already has soft delete fields:
+  - ActiveFlag (Yes/No, DEFAULT True) - soft delete indicator
+  - DateCanceled (Date/Time) - cancellation timestamp
+  - CancelReason (Text, 255) - reason for cancellation
+  - CanceledBy (Text, 64) - user who canceled
+
+TABLE: SalesOrderEntry
+----------------------
+Already has:
+  - IsDeleted (Yes/No, DEFAULT False) - soft delete flag
+
+TABLE: QualifierType
+--------------------
+Used for qualifier descriptions:
+  - QualifierCode (Text, 10) - e.g., "CM"
+  - QualifierName (Text, 100) - e.g., "Customer Material"
+
+
+================================================================================
+QUERY MODIFICATIONS
+================================================================================
+
+QUERY: qryFirstQualifierOnly (MODIFY)
+-------------------------------------
+Add JOIN to QualifierType for description:
+
+SELECT
+    E.SOID,
+    E.QualifierCode,
+    Q.QualifierName AS QualifierDescription,
+    E.SequenceNo,
+    E.OrderNumberDisplay
+FROM SalesOrderEntry AS E
+LEFT JOIN QualifierType AS Q ON E.QualifierCode = Q.QualifierCode
+WHERE E.IsDeleted = 0
+  AND E.QualifierCode Is Not Null
+  AND E.QualifierCode <> ''
+  AND E.SequenceNo = (
+        SELECT MIN(E2.SequenceNo)
+        FROM SalesOrderEntry AS E2
+        WHERE E2.SOID = E.SOID
+          AND E2.IsDeleted = 0
+          AND E2.QualifierCode Is Not Null
+          AND E2.QualifierCode <> ''
+    );
+
+
+QUERY: qryOrderList_Base (MODIFY)
+---------------------------------
+Add QualifierDescription and ActiveFlag to SELECT:
+
+SELECT S.SOID, S.OrderNumber, S.CustomerName, S.CustomerCode, S.PONumber,
+       S.DateReceived, S.DateBilled, S.BaseToken, S.SystemLetter,
+       S.BackorderNo, S.BatchID, S.ActiveFlag,
+       Q.QualifierCode, Q.QualifierDescription, Q.SequenceNo
+FROM SalesOrders AS S
+LEFT JOIN qryFirstQualifierOnly AS Q ON S.SOID = Q.SOID
+WHERE S.ActiveFlag = True;
+
+
+================================================================================
+MODULE: modOrderActions (NEW or add to existing module)
+================================================================================
+
+'-------------------------------------------------------------------------------
+' CancelSalesOrder
+' Soft deletes a SalesOrder by setting ActiveFlag=False and recording details
+'-------------------------------------------------------------------------------
+Public Function CancelSalesOrder(ByVal SOID As Long, _
+                                  ByVal Reason As String, _
+                                  Optional ByVal CascadeEntries As Boolean = True) As Boolean
+    On Error GoTo ErrHandler
+
+    Dim db As DAO.Database
+    Dim sql As String
+
+    Set db = CurrentDb
+
+    ' Update SalesOrders - soft delete
+    sql = "UPDATE SalesOrders SET " & _
+          "ActiveFlag = False, " & _
+          "DateCanceled = #" & Format(Now(), "yyyy-mm-dd hh:nn:ss") & "#, " & _
+          "CancelReason = " & QuoteSQL(Reason) & ", " & _
+          "CanceledBy = " & QuoteSQL(Environ("USERNAME")) & " " & _
+          "WHERE SOID = " & SOID
+    db.Execute sql, dbFailOnError
+
+    ' Optionally cascade to SalesOrderEntry
+    If CascadeEntries Then
+        sql = "UPDATE SalesOrderEntry SET IsDeleted = True " & _
+              "WHERE SOID = " & SOID
+        db.Execute sql, dbFailOnError
+    End If
+
+    CancelSalesOrder = True
+    Exit Function
+
+ErrHandler:
+    MsgBox "Error canceling order: " & Err.Description, vbExclamation
+    CancelSalesOrder = False
+End Function
+
+
+'-------------------------------------------------------------------------------
+' RestoreSalesOrder
+' Restores a canceled SalesOrder by setting ActiveFlag=True
+'-------------------------------------------------------------------------------
+Public Function RestoreSalesOrder(ByVal SOID As Long) As Boolean
+    On Error GoTo ErrHandler
+
+    Dim db As DAO.Database
+    Dim sql As String
+
+    Set db = CurrentDb
+
+    ' Restore SalesOrders
+    sql = "UPDATE SalesOrders SET " & _
+          "ActiveFlag = True, " & _
+          "DateCanceled = Null, " & _
+          "CancelReason = Null, " & _
+          "CanceledBy = Null " & _
+          "WHERE SOID = " & SOID
+    db.Execute sql, dbFailOnError
+
+    ' Restore SalesOrderEntry
+    sql = "UPDATE SalesOrderEntry SET IsDeleted = False " & _
+          "WHERE SOID = " & SOID
+    db.Execute sql, dbFailOnError
+
+    RestoreSalesOrder = True
+    Exit Function
+
+ErrHandler:
+    MsgBox "Error restoring order: " & Err.Description, vbExclamation
+    RestoreSalesOrder = False
+End Function
+
+
+'-------------------------------------------------------------------------------
+' QuoteSQL
+' Escapes single quotes for SQL string values
+'-------------------------------------------------------------------------------
+Private Function QuoteSQL(ByVal val As String) As String
+    QuoteSQL = "'" & Replace(val, "'", "''") & "'"
+End Function
+
+
+================================================================================
+FORM: frmOrderList - NEW CONTROLS
+================================================================================
+
+OPTION GROUP: fraOrderFilter (Add to Form Header)
+-------------------------------------------------
+Property          | Value
+------------------|------------------
+Name              | fraOrderFilter
+DefaultValue      | 1
+SpecialEffect     | Flat or Etched
+
+Option Buttons inside group:
+  Option 1: Label = "Active Orders"    Value = 1
+  Option 2: Label = "Canceled Orders"  Value = 2
+  Option 3: Label = "All Orders"       Value = 3
+
+
+TEXT BOX: txtCancelStatus (Add to Detail Section)
+-------------------------------------------------
+Property          | Value
+------------------|------------------
+Name              | txtCancelStatus
+ControlSource     | CancelStatus
+Width             | 0.75"
+ForeColor         | 255 (Red)
+FontBold          | Yes
+FontSize          | 8 or 9
+TextAlign         | Center
+
+Add Label in Form Header: "Status"
+
+
+TEXT BOX: txtQualifierDescription (Add to Detail Section)
+---------------------------------------------------------
+Property          | Value
+------------------|------------------
+Name              | txtQualifierDescription
+ControlSource     | QualifierDescription
+Width             | 1.5"
+
+Add Label in Form Header: "Description"
+
+
+COMMAND BUTTON: cmdCancelOrder (Add to Form Header)
+---------------------------------------------------
+Property          | Value
+------------------|------------------
+Name              | cmdCancelOrder
+Caption           | Cancel Order
+Width             | 1"
+
+
+COMMAND BUTTON: cmdRestoreOrder (Add to Form Header - Optional)
+---------------------------------------------------------------
+Property          | Value
+------------------|------------------
+Name              | cmdRestoreOrder
+Caption           | Restore Order
+Width             | 1"
+
+
+================================================================================
+FORM: frmOrderList - CODE UPDATES
+================================================================================
+
+'-------------------------------------------------------------------------------
+' RefreshPage (REPLACE existing sub)
+' Adds status filter and new fields
+'-------------------------------------------------------------------------------
+Private Sub RefreshPage()
+    Dim sql As String
+    Dim statusFilter As String
+
+    ' Determine filter based on option group
+    Select Case Nz(Me.fraOrderFilter, 1)
+        Case 1  ' Active only
+            statusFilter = "S.ActiveFlag = True"
+        Case 2  ' Canceled only
+            statusFilter = "S.ActiveFlag = False"
+        Case 3  ' All
+            statusFilter = "1=1"
+    End Select
+
+    If Len(Nz(mBatchFilter, "")) > 0 Then
+        ' Batch filter: show only orders from specific batch
+        sql = "SELECT Q.*, " & _
+              "IIf(Q.ActiveFlag=False,'CANCELED','') AS CancelStatus " & _
+              "FROM qryOrderList_Base AS Q " & _
+              "WHERE " & mBatchFilter & " " & _
+              "ORDER BY Q.SOID DESC;"
+    Else
+        ' Standard paged view with status filter
+        sql = "SELECT S.SOID, S.OrderNumber, S.CustomerName, S.PONumber, " & _
+              "S.DateReceived, S.BaseToken, S.SystemLetter, S.BackorderNo, " & _
+              "S.BatchID, S.ActiveFlag, " & _
+              "IIf(S.ActiveFlag=False,'CANCELED','') AS CancelStatus, " & _
+              "F.QualifierCode, F.QualifierDescription, F.SequenceNo " & _
+              "FROM SalesOrders AS S " & _
+              "LEFT JOIN qryFirstQualifierOnly AS F ON S.SOID = F.SOID " & _
+              "WHERE " & statusFilter & " " & _
+              "ORDER BY S.SOID DESC;"
+    End If
+
+    Me.RecordSource = sql
+End Sub
+
+
+'-------------------------------------------------------------------------------
+' fraOrderFilter_AfterUpdate (ADD)
+' Refreshes list when filter selection changes
+'-------------------------------------------------------------------------------
+Private Sub fraOrderFilter_AfterUpdate()
+    RefreshPage
+End Sub
+
+
+'-------------------------------------------------------------------------------
+' cmdCancelOrder_Click (ADD)
+' Prompts for reason and cancels selected order
+'-------------------------------------------------------------------------------
+Private Sub cmdCancelOrder_Click()
+    On Error GoTo ErrHandler
+
+    ' Check if an order is selected
+    If IsNull(Me.SOID) Or Me.SOID = 0 Then
+        MsgBox "Please select an order first.", vbInformation
+        Exit Sub
+    End If
+
+    ' Check if already canceled
+    If Nz(Me.ActiveFlag, True) = False Then
+        MsgBox "This order is already canceled.", vbInformation
+        Exit Sub
+    End If
+
+    ' Prompt for reason
+    Dim sReason As String
+    sReason = InputBox("Enter cancellation reason:", "Cancel Order", "")
+
+    ' User clicked Cancel or left blank
+    If Len(Trim(sReason)) = 0 Then
+        MsgBox "Cancellation requires a reason.", vbInformation
+        Exit Sub
+    End If
+
+    ' Confirm
+    If MsgBox("Cancel order " & Nz(Me.txtOrderNumberDisplay, Me.OrderNumber) & "?" & vbCrLf & vbCrLf & _
+              "Reason: " & sReason, _
+              vbQuestion + vbYesNo, "Confirm Cancellation") = vbNo Then
+        Exit Sub
+    End If
+
+    ' Execute cancellation
+    If CancelSalesOrder(Me.SOID, sReason) Then
+        MsgBox "Order canceled successfully.", vbInformation
+        RefreshPage
+    End If
+
+    Exit Sub
+
+ErrHandler:
+    MsgBox "Error: " & Err.Description, vbExclamation
+End Sub
+
+
+'-------------------------------------------------------------------------------
+' cmdRestoreOrder_Click (ADD)
+' Restores a canceled order
+'-------------------------------------------------------------------------------
+Private Sub cmdRestoreOrder_Click()
+    On Error GoTo ErrHandler
+
+    If IsNull(Me.SOID) Or Me.SOID = 0 Then
+        MsgBox "Please select an order first.", vbInformation
+        Exit Sub
+    End If
+
+    If Nz(Me.ActiveFlag, True) = True Then
+        MsgBox "This order is not canceled.", vbInformation
+        Exit Sub
+    End If
+
+    If MsgBox("Restore order " & Nz(Me.txtOrderNumberDisplay, Me.OrderNumber) & "?", _
+              vbQuestion + vbYesNo, "Confirm Restore") = vbYes Then
+        If RestoreSalesOrder(Me.SOID) Then
+            MsgBox "Order restored successfully.", vbInformation
+            RefreshPage
+        End If
+    End If
+
+    Exit Sub
+
+ErrHandler:
+    MsgBox "Error: " & Err.Description, vbExclamation
+End Sub
+
+
+'-------------------------------------------------------------------------------
+' cmdFormReset_Click (MODIFY existing sub)
+' Add filter reset
+'-------------------------------------------------------------------------------
+Private Sub cmdFormReset_Click()
+    Me.fraOrderFilter = 1  ' Reset to Active Orders
+    mBatchFilter = ""
+    mlngStartRow = 1
+    mlngEndRow = PAGE_SIZE
+    RefreshPage
+End Sub
+
+
+================================================================================
+IMPLEMENTATION CHECKLIST
+================================================================================
+
+[ ] 1. Modify query: qryFirstQualifierOnly (add QualifierType JOIN)
+[ ] 2. Modify query: qryOrderList_Base (add QualifierDescription, ActiveFlag)
+[ ] 3. Add module functions: CancelSalesOrder, RestoreSalesOrder, QuoteSQL
+[ ] 4. Add form control: fraOrderFilter (option group in header)
+[ ] 5. Add form control: txtCancelStatus (in detail, red text)
+[ ] 6. Add form control: txtQualifierDescription (in detail)
+[ ] 7. Add form control: cmdCancelOrder (button in header)
+[ ] 8. Add form control: cmdRestoreOrder (button in header - optional)
+[ ] 9. Update form code: RefreshPage
+[ ] 10. Add form code: fraOrderFilter_AfterUpdate
+[ ] 11. Add form code: cmdCancelOrder_Click
+[ ] 12. Add form code: cmdRestoreOrder_Click
+[ ] 13. Modify form code: cmdFormReset_Click (add filter reset)
+[ ] 14. Add header labels: "Status", "Description"
+[ ] 15. Test: Cancel an order, verify it disappears from Active view
+[ ] 16. Test: Switch to Canceled filter, verify order appears with red status
+[ ] 17. Test: Restore order, verify it returns to Active view
+
+
+================================================================================
