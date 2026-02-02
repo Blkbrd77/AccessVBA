@@ -1,0 +1,345 @@
+# AI CONTEXT LITE - 2Feb26databaseDemo.accdb
+Generated: 2/2/2026 5:28:13 PM
+Tables: 13 | Queries: 6 | Forms: 8 | Modules: 23
+------------------------------------------------------------
+
+## TABLES
+
+### Customers (3797 rows)
+  CustomerID: Long
+  CustomerName: Text
+  CustomerCode: Text(20)
+  IsActive: Yes/No DEFAULT No
+  PK: CustomerID
+
+### ImportTemplate_SalesOrderEntry_ImportErrors (21 rows)
+  Error: Text
+  Field: Text
+  Row: Long
+
+### ImportTemplate_SalesOrders1_ImportErrors (44 rows)
+  Error: Text
+  Field: Text
+  Row: Long
+
+### OrderSeq (53 rows)
+  Scope: Text(10)
+  BaseToken: Text(32)
+  QualifierCode: Text(10)
+  SystemLetter: Text(1)
+  NextSeq: Long
+  LastUpdated: Date/Time
+
+### Projects (9 rows)
+  ProjectID: Long
+  BaseToken: Text(20)
+  Program: Text
+  JobCode3: Text
+  ActiveFlag: Yes/No DEFAULT =Yes
+  PK: ProjectID
+
+### QualifierType (10 rows)
+  QCID: Long
+  QualifierCode: Text(10)
+  QualifierName: Text(100)
+  SequenceWidth: Long DEFAULT 0
+  AllowMultiple: Yes/No DEFAULT No
+  ActiveFlag: Yes/No DEFAULT No
+  Notes: Memo
+  PK: QCID
+
+### SalesOrderEntry (54 rows)
+  SOEntryID: Long
+  SOID: Long DEFAULT 0
+  OrderNumberDisplay: Text(50)
+  QualifierCode: Text(10)
+  SequenceNo: Integer DEFAULT 0
+  IsDeleted: Yes/No DEFAULT No
+  CreatedOn: Date/Time
+  PK: SOEntryID
+
+### SalesOrderQualifier (0 rows)
+  SOQID: Long
+  SOID: Long DEFAULT 0
+  QCID: Long DEFAULT 0
+  SequenceNo: Long DEFAULT 0
+  DerivedOrderID: Text(30)
+  CreatedON: Date/Time
+  IsDeleted: Yes/No DEFAULT No
+  Notes: Memo
+  PK: SOQID
+
+### SalesOrderQualifierAudit (0 rows)
+  SOQAuditID: Long
+  SOQID: Long DEFAULT 0
+  SOID: Long DEFAULT 0
+  QCID: Long DEFAULT 0
+  QualifierCode: Text(10)
+  SequenceNo: Long DEFAULT 0
+  Action: Text(20)
+  ActionBy: Text(50)
+  ActionOn: Date/Time
+  Reason: Memo
+  PK: SOQAuditID
+
+### SalesOrders (54 rows)
+  SOID: Long
+  OrderType: Text(10)
+  BaseToken: Text(50)
+  SystemLetter: Text(1)
+  BackorderNo: Integer
+  CustomerName: Text
+  CustomerCode: Text
+  PONumber: Text(55)
+  DateReceived: Date/Time
+  DateBilled: Date/Time
+  ActiveFlag: Yes/No DEFAULT =Yes
+  OrderNumber: Text(50)
+  DateBackorderCreated: Date/Time
+  DateCreated: Date/Time
+  DateCanceled: Date/Time
+  CancelReason: Text
+  CanceledBy: Text(64)
+  BatchID: Text(50)
+  PK: SOID
+
+### SystemLetter (6 rows)
+  SystemLetter: Text(1) NOT NULL
+  Description: Text
+  ActiveFlag: Yes/No DEFAULT =Yes
+  PK: SystemLetter
+
+### tmpBatchPreview (0 rows)
+  OrderNumber: Text(50)
+  QualifierCode: Text(10)
+  SeqNo: Long
+
+### tmpQualifierQty (10 rows)
+  QualifierCode: Text(10)
+  Description: Text(100)
+  Qty: Long
+
+## RELATIONSHIPS
+
+SalesOrders.SOID -> SalesOrderEntry.SOID [Enforced]
+QualifierType.QCID -> SalesOrderQualifier.QCID [Enforced]
+SalesOrders.SOID -> SalesOrderQualifier.SOID [Enforced]
+SalesOrders.SOID -> SalesOrderQualifierAudit.SOID [Enforced]
+SalesOrderQualifier.SOQID -> SalesOrderQualifierAudit.SOQID [Enforced]
+MSysNavPaneGroupCategories.Id -> MSysNavPaneGroups.GroupCategoryID [Enforced, CascadeUpdate, CascadeDelete]
+MSysNavPaneGroups.Id -> MSysNavPaneGroupToObjects.GroupID [Enforced, CascadeUpdate, CascadeDelete]
+SystemLetter.SystemLetter -> SalesOrders.SystemLetter [Enforced, CascadeUpdate]
+
+## QUERIES
+
+### dlgNewOrderType
+```sql
+SELECT Projects.BaseToken, Projects.Program, Projects.JobCode3
+FROM Projects;
+
+```
+
+### frmOrderList
+```sql
+SELECT S.SOID, S.OrderNumber, S.CustomerName, S.PONumber, S.DateReceived, F.QualifierCode, F.SequenceNo, S.BaseToken, S.SystemLetter, S.BackorderNo, S.BatchID
+FROM SalesOrders AS S LEFT JOIN qryOrderList_Base AS F ON S.SOID = F.SOID
+WHERE S.ActiveFlag = True
+ORDER BY S.SOID DESC;
+
+```
+
+### frmSalesOrderEntry
+```sql
+SELECT SystemLetter, Description
+FROM SystemLetter
+WHERE ActiveFlag = True
+ORDER BY SystemLetter;
+
+```
+
+### fsubQualifierQty
+```sql
+SELECT QualifierCode, Description, Qty
+FROM tmpQualifierQty
+ORDER BY QualifierCode;
+
+```
+
+### qryFirstQualifierOnly
+```sql
+SELECT SOID, QualifierCode, SequenceNo, OrderNumberDisplay
+FROM SalesOrderEntry
+WHERE IsDeleted = 0
+  AND QualifierCode Is Not Null
+  AND QualifierCode <> ''
+  AND SequenceNo = (
+        SELECT MIN(E2.SequenceNo)
+        FROM SalesOrderEntry AS E2
+        WHERE E2.SOID = SalesOrderEntry.SOID
+          AND E2.IsDeleted = 0
+          AND E2.QualifierCode Is Not Null
+          AND E2.QualifierCode <> ''
+    );
+
+```
+
+### qryOrderList_Base
+```sql
+SELECT S.SOID, S.OrderNumber, S.CustomerName, S.CustomerCode, S.PONumber, S.DateReceived, S.DateBilled, S.BaseToken, S.SystemLetter, S.BackorderNo, S.BatchID, Q.QualifierCode, Q.SequenceNo
+FROM SalesOrders AS S LEFT JOIN qryFirstQualifierOnly AS Q ON S.SOID = Q.SOID
+WHERE S.ActiveFlag = True;
+
+```
+
+## FORMS
+
+### frmSalesOrderEntry
+RecordSource: SalesOrders
+Controls:
+  cboOrderType <- OrderType
+  txtBaseToken <- BaseToken
+  txtBackOrderNo <- BackorderNo
+  txtCustomerName <- CustomerName
+  cboCustomerCode <- CustomerCode
+  txtPONumber <- PONumber
+  txtDateReceived <- DateReceived
+  cboSystemLetter <- SystemLetter
+  txtDateBilled <- DateBilled
+HasCode: Yes
+
+### fsubProjectPicker
+RecordSource: 
+Controls:
+HasCode: Yes
+
+### frmOrderList
+RecordSource: SELECT * FROM (  SELECT     Q.*,     DCount('*', 'SalesOrders', 'SOID >= ' & Q.SOID) AS RowNum   FROM qryOrderList_Base AS Q ) AS X WHERE X.RowNum BETWEEN 1 AND 25 ORDER BY X.SOID DESC;
+Controls:
+  txtOrderNumberDisplay <- OrderNumber
+  txtCustomerName <- CustomerName
+  txtPONumber <- PONumber
+  txtDateReceived <- DateReceived
+  txtQualifierCode <- QualifierCode
+  Text51 <- SequenceNo
+  Text54 <- BaseToken
+  txtDateBilled <- DateBilled
+  txtStampDate <- =UCase(Format([DateBilled],"mmm ")) & Left(Format([DateBilled],"dd"),1) & " " & Right(Format([DateBilled],"dd"),1) & " " & Format([DateBilled],"yyyy")
+HasCode: Yes
+
+### dlgStampBilledDate
+RecordSource: 
+Controls:
+HasCode: Yes
+
+### dlgNewOrderType
+RecordSource: SELECT * FROM Projects;
+Controls:
+HasCode: Yes
+
+### fsubQualifierQty
+RecordSource: fsubQualifierQty
+Controls:
+  txtQualifierCode <- QualifierCode
+  txtDescription <- Description
+  txtQty <- Qty
+
+### dlgBatchGenerateOrders
+RecordSource: 
+Controls:
+HasCode: Yes
+
+### dlgCancelOrder
+RecordSource: 
+Controls:
+HasCode: Yes
+
+## VBA PUBLIC INTERFACE
+
+### basOrderNumbering
+  Public Function NextSalesBaseToken() As Long
+  Public Function DefaultSalesSystemLetter() As String
+
+### basSchemaDump
+  Public Sub DumpAllTableSchemas(ByVal outputPath As String)
+  Public Sub Patch_SalesOrders_OrderNumber_Field()
+  Public Sub Drop_SalesOnly_Composite_Index()
+  Public Sub Dump_SalesOrders_Indexes_Detailed()
+  Public Sub Allow_Duplicate_PONumbers()
+  Public Sub Drop_Blocking_Composite_For_Project()
+  Public Sub Create_OrderSeq_Table_IfMissing()
+  Public Sub Ensure_SalesOrders_BatchID()
+  Public Sub Ensure_BatchWizard_TempTables_DAO()
+
+### basFormDump
+  Public Sub DumpAllForms(outputPath As String)
+
+### basSalesOrdersIndexes
+  Public Sub DumpSalesOrdersIndexesToImmediate()
+
+### basOrderNumberGen
+  Public Function BuildSalesOrderNumber(  ByVal BaseToken As String,  ByVal SystemLetter As String,  ByVal BackorderNo As Long) As String
+  Public Function TryBuildProjectOrderNumber(  ByVal SOID As Long,  ByVal BaseToken As String,  ByVal SystemLetter As Variant,  ByVal BackorderNo As Long) As String
+  Public Function GenerateOrderNumberWithRetry(  ByVal OrderType As String,  ByVal SOID As Long,  ByVal BaseToken As String,  ByVal SystemLetter As Variant,  ByVal BackorderNo As Long,  Optional ByVal maxRetries As Long = 5) As String
+
+### basSeqAllocator
+  Public Function ReserveSalesSeq(ByVal BaseToken As String, ByVal SystemLetter As String) As Long
+  Public Function ReserveProjectSeq(ByVal BaseToken As String, ByVal QualifierCode As String, ByVal SystemLetter As String) As Long
+  Public Function ReserveSeq(  ByVal Scope As String,  ByVal BaseToken As String,  ByVal QualifierCode As String,  ByVal SystemLetter As String,  Optional ByVal IsPreview As Boolean = False  ) As Long
+
+### basProjectAssignment
+  Public Sub AssignOrderNumberIfReady(ByVal SOID As Long)
+
+### basResetRoutine
+  Public Sub Reset_Qty_From_Qualifiers(Optional ByVal Silent As Boolean = False)
+  Public Sub Ensure_QualifierType_Seed()
+
+### basBatchWizard
+  Public Function NewGuidString() As String
+  Public Sub BuildPreview()
+  Public Function CommitBatch(  ByVal Scope As String,  ByVal BaseToken As String,  ByVal SystemLetter As String,  ByVal CustomerCode As Variant,  ByVal CustomerName As Variant,  ByVal PONumber As Variant,  ByVal DateReceived As Variant,  ByRef CreatedCount As Long,  ByRef BatchID As String  ) As Boolean
+
+### basAIContext
+  Public Sub ExportAIContext(Optional ByVal OutputFolder As String = "")
+
+### basDiag
+  Public Sub Trace(ByVal tag As String)
+  Public Sub TempClear(ParamArray names() As Variant)
+  Public Function TV(ByVal name As String, Optional ByVal defaultValue As Variant) As Variant
+  Public Sub ClearHandledError(Optional ByVal where As String = "")
+
+### basDataImport
+
+### basOrderFunctions
+  Public Function CreateBackorder(ByVal SourceSOID As Long, ByVal BatchID As String) As Long
+
+### basModBackorderDiag
+  Public Sub BackorderSizeCheck(SourceSOID As Long, ByVal BatchID As String)
+
+### basDeleteBySOID
+  Public Sub DeleteOrdersBySOIDList(ByVal soidListCsv As String)
+
+### basContextLite
+  Public Sub ExportContextLite(Optional ByVal OutputFolder As String = "")
+
+## DEPRECATION HINTS
+
+### Empty Tables (0 rows)
+  - SalesOrderQualifier
+  - SalesOrderQualifierAudit
+  - tmpBatchPreview
+
+### Likely Temporary Tables
+  - ImportTemplate_SalesOrderEntry_ImportErrors
+  - ImportTemplate_SalesOrders1_ImportErrors
+  - tmpBatchPreview
+  - tmpQualifierQty
+
+### Tables Not in Queries
+  - ImportTemplate_SalesOrderEntry_ImportErrors
+  - ImportTemplate_SalesOrders1_ImportErrors
+  - OrderSeq
+  - QualifierType
+  - SalesOrderQualifier
+  - SalesOrderQualifierAudit
+
+
