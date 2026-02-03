@@ -1,0 +1,69 @@
+# 3Feb Fixes - frmOrderList
+Generated: 2/3/2026
+
+## Fix 1: cmdCancelOrder Error 2465 - "Can't find the field 'Active Flag'"
+
+### Problem
+Clicking cmdCancelOrder on frmOrderList throws:
+  Error 2465 - can't find the field 'Active Flag' referred to in your expression.
+
+The cmdCancelOrder_Click code references Me!ActiveFlag, but ActiveFlag is not
+in the form's recordset. qryOrderList_Base filters on ActiveFlag in the WHERE
+clause but never includes it in the SELECT list.
+
+### Steps to Implement
+
+1. Open frmOrderList code module (VBE)
+2. Find cmdCancelOrder_Click
+3. Delete these lines:
+
+       If Nz(Me!ActiveFlag, True) = False Then
+           MsgBox "This order is already canceled.", vbInformation
+           Exit Sub
+       End If
+
+4. Save the module
+
+### Why This Works
+The form's query already filters WHERE S.ActiveFlag = True, so every record
+visible on frmOrderList is guaranteed to be active. The check is redundant.
+
+------------------------------------------------------------
+
+## Fix 2: Display QualifierName Instead of QualifierCode on frmOrderList
+
+### Problem
+frmOrderList currently shows QualifierCode (e.g., "ENG") instead of the
+human-readable QualifierName (e.g., "Engineering") from the QualifierType table.
+
+### Steps to Implement
+
+Step 1 - Modify qryOrderList_Base
+
+1. Open qryOrderList_Base in SQL View
+2. Replace the existing SQL with:
+
+       SELECT S.SOID, S.OrderNumber, S.CustomerName, S.CustomerCode,
+              S.PONumber, S.DateReceived, S.DateBilled, S.BaseToken,
+              S.SystemLetter, S.BackorderNo, S.BatchID,
+              Q.QualifierCode, QT.QualifierName, Q.SequenceNo
+       FROM (SalesOrders AS S
+             LEFT JOIN qryFirstQualifierOnly AS Q ON S.SOID = Q.SOID)
+             LEFT JOIN QualifierType AS QT ON Q.QualifierCode = QT.QualifierCode
+       WHERE S.ActiveFlag = True;
+
+3. Save and close the query
+
+Step 2 - Update the form control
+
+1. Open frmOrderList in Design View
+2. Select the txtQualifierCode textbox
+3. In the Property Sheet, change Control Source from QualifierCode to QualifierName
+4. (Optional) Rename the control from txtQualifierCode to txtQualifierName
+5. (Optional) Update the column header label if one exists
+6. Save and close the form
+
+### Notes
+- The LEFT JOINs ensure orders without a qualifier still display normally
+- Access requires parentheses when chaining multiple LEFT JOINs
+- QualifierCode remains in the SELECT in case other VBA code references it
