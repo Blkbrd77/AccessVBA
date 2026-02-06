@@ -1,0 +1,1262 @@
+# Multi-User Access Database Action Plan
+
+**Database:** Q1019_23Jan26_Start_travellaptop.accdb  
+**Target Users:** 4 concurrent users  
+**Deployment:** Shared network drive  
+**Created:** February 6, 2026
+
+-----
+
+## Executive Summary
+
+This document provides a step-by-step action plan to convert your single-user Access database into a production-ready multi-user system. The plan addresses:
+
+1. **Database Architecture** - Split FE/BE to prevent corruption
+1. **Concurrency Control** - Pessimistic locking for sequence reservation
+1. **Deployment Strategy** - Front-end distribution and versioning
+1. **Testing Protocol** - Validation before production release
+
+**Estimated Total Time:** 8-12 hours  
+**Critical Path Items:** Database split, pessimistic locking, multi-user testing
+
+-----
+
+## Table of Contents
+
+- [Phase 1: Database Architecture (CRITICAL)](#phase-1-database-architecture-critical)
+- [Phase 2: Concurrency Control (CRITICAL)](#phase-2-concurrency-control-critical)
+- [Phase 3: Deployment Infrastructure (HIGH)](#phase-3-deployment-infrastructure-high)
+- [Phase 4: Testing & Validation (HIGH)](#phase-4-testing--validation-high)
+- [Phase 5: Production Rollout (MEDIUM)](#phase-5-production-rollout-medium)
+- [Phase 6: Monitoring & Maintenance (ONGOING)](#phase-6-monitoring--maintenance-ongoing)
+- [Appendix: Copilot Prompts](#appendix-copilot-prompts)
+
+-----
+
+## Phase 1: Database Architecture (CRITICAL)
+
+### Priority: 🔴 CRITICAL
+
+### Time Estimate: 2-3 hours
+
+### Risk if Skipped: Database corruption, data loss, frustrated users
+
+### 1.1 Backup Current Database
+
+**What:** Create timestamped backup before making any changes
+
+**Steps:**
+
+1. Copy entire database file
+1. Name: `Q1019_BACKUP_[DATE]_PreSplit.accdb`
+1. Store in safe location (not on network share during work)
+
+**Validation:**
+
+- [ ] Backup file opens successfully
+- [ ] Backup file is in safe location
+- [ ] Backup timestamp is documented
+
+-----
+
+### 1.2 Split Database into Front-End and Back-End
+
+**What:** Separate data (tables) from application logic (forms, queries, VBA)
+
+**Why:**
+
+- Prevents file corruption from concurrent access
+- Allows independent updates of UI/logic without affecting data
+- Improves performance (queries run locally, only data over network)
+- Each user gets their own copy of forms/code
+
+**Steps:**
+
+1. **Open your database in Access**
+1. **Navigate to Database Tools**
+- Ribbon: Database Tools → Access Database (in “Move Data” group)
+1. **Run Database Splitter Wizard**
+- Click “Split Database”
+- Save backend as: `Q1019_BE.accdb`
+- Recommended location: `\\server\share\Q1019\Backend\Q1019_BE.accdb`
+1. **Verify Split Success**
+- Original file is now your Front-End template
+- All tables show “linked table” icon (→)
+- Backend file contains only tables
+- Frontend contains forms, queries, reports, modules
+1. **Rename Files Appropriately**
+   
+   ```
+   Original → Q1019_FE_TEMPLATE.accdb
+   Backend  → Q1019_BE.accdb
+   ```
+
+**Validation Checklist:**
+
+- [ ] Backend file contains all 13 tables
+- [ ] Frontend tables show linked table arrows
+- [ ] Can create test order through frontend
+- [ ] Test data appears in backend tables
+- [ ] No VBA code in backend file
+- [ ] All forms open correctly in frontend
+
+**Common Issues & Solutions:**
+
+|Issue                    |Solution                                                      |
+|-------------------------|--------------------------------------------------------------|
+|“Can’t find table” error |Relink tables via External Data → Linked Table Manager        |
+|Slow performance         |Ensure backend is on fast network share, not cloud sync folder|
+|#Deleted appears in forms|Refresh form, check referential integrity                     |
+
+-----
+
+### 1.3 Set Up Backend Security
+
+**What:** Protect backend from accidental changes
+
+**Steps:**
+
+1. **Make Backend Read-Only for Users**
+- Set NTFS permissions: Sales Users = Read-Only on backend folder
+- Only admins/you have Write permission
+1. **Create Admin Tools for Backend Maintenance**
+- Compact & Repair utility
+- Backup script
+
+**Copilot Prompt for Admin Tools:**
+
+```
+Create a VBA module called basBackendMaintenance with these functions:
+
+1. CompactBackend() - Compacts the linked backend database
+2. BackupBackend() - Creates timestamped backup of backend to specified folder
+3. RepairLinkedTables() - Refreshes all table links if backend path changes
+
+The backend path should be configurable via a table called tblConfig with fields:
+- ConfigKey (Text)
+- ConfigValue (Text)
+
+Add error handling for network disconnections and file locks.
+```
+
+**Validation:**
+
+- [ ] Users can read but not modify backend file permissions
+- [ ] Admin tools tested and working
+- [ ] Backend path is configurable
+
+-----
+
+## Phase 2: Concurrency Control (CRITICAL)
+
+### Priority: 🔴 CRITICAL
+
+### Time Estimate: 2-3 hours
+
+### Risk if Skipped: Duplicate order numbers, data integrity issues
+
+### 2.1 Update basSeqAllocator with Pessimistic Locking
+
+**What:** Modify sequence reservation to prevent race conditions
+
+**Current Problem:**
+
+```vba
+' CURRENT CODE (has race condition):
+Set rs = db.OpenRecordset(sql, dbOpenDynaset)  ' ← No lock!
+nextSeq = rs!NextSeq  ' ← Alice and Bob both read same number
+rs.Edit
+rs!NextSeq = nextSeq + 1  ' ← Both write same incremented value
+rs.Update  ' ← DUPLICATE SEQUENCE!
+```
+
+**Solution:** Use pessimistic locking to make other users wait
+
+**Copilot Prompt for Sequence Allocator:**
+
+```
+Review the basSeqAllocator module in my Access database.
+
+Update the ReserveSeq function to use pessimistic locking to prevent race conditions when multiple users reserve sequences simultaneously.
+
+Requirements:
+1. Use dbPessimistic flag when opening recordset
+2. Implement retry logic with up to 5 attempts
+3. Wait 500ms between retries using Windows Sleep API
+4. Handle error 3260 (record locked) gracefully with retry
+5. Raise clear error after max retries exceeded
+6. Add proper error handling for unexpected errors
+7. Add XML comments documenting the locking mechanism
+8. Preserve existing IsPreview parameter behavior
+
+For reference, the function signature is:
+Public Function ReserveSeq( _
+    ByVal Scope As String, _
+    ByVal BaseToken As String, _
+    ByVal QualifierCode As String, _
+    ByVal SystemLetter As String, _
+    Optional ByVal IsPreview As Boolean = False _
+) As Long
+
+Include the Windows API Sleep declaration at module level (handle both 32-bit and 64-bit).
+```
+
+**Additional Module-Level Code Needed:**
+
+Add this at the top of `basSeqAllocator`:
+
+```vba
+' Windows API for Sleep function
+#If VBA7 Then
+    Private Declare PtrSafe Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
+#Else
+    Private Declare Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
+#End If
+```
+
+**Validation Steps:**
+
+1. [ ] Code compiles without errors
+1. [ ] Single-user test creates sequences correctly
+1. [ ] ReserveSeq with IsPreview=True doesn’t increment
+1. [ ] ReserveSeq with IsPreview=False increments properly
+1. [ ] Error message is clear when max retries exceeded
+
+-----
+
+### 2.2 Update Other Sequence Functions
+
+**What:** Apply same pattern to ReserveSalesSeq and ReserveProjectSeq
+
+**Copilot Prompt:**
+
+```
+The basSeqAllocator module has three public functions for reserving sequences:
+- ReserveSeq (generic, already updated)
+- ReserveSalesSeq 
+- ReserveProjectSeq
+
+Update ReserveSalesSeq and ReserveProjectSeq to:
+1. Call the updated ReserveSeq function instead of duplicating logic
+2. Pass appropriate Scope parameter ("SALES" or "PROJECT")
+3. Maintain existing function signatures for backward compatibility
+4. Add brief comments explaining they are convenience wrappers
+
+Example for ReserveSalesSeq:
+Public Function ReserveSalesSeq(ByVal BaseToken As String, ByVal SystemLetter As String) As Long
+    ' Convenience wrapper for sales orders
+    ReserveSalesSeq = ReserveSeq("SALES", BaseToken, "", SystemLetter, False)
+End Function
+```
+
+**Validation:**
+
+- [ ] ReserveSalesSeq calls ReserveSeq correctly
+- [ ] ReserveProjectSeq calls ReserveSeq correctly
+- [ ] Existing code using these functions still works
+
+-----
+
+### 2.3 Add Concurrency Logging
+
+**What:** Track when lock contention occurs for monitoring
+
+**Copilot Prompt:**
+
+```
+Create a new module called basAuditLog with a function to log concurrency events.
+
+Function signature:
+Public Sub LogConcurrencyEvent( _
+    ByVal EventType As String, _
+    ByVal Details As String, _
+    Optional ByVal UserName As String = "" _
+)
+
+Requirements:
+1. Create table tblConcurrencyLog if it doesn't exist with fields:
+   - LogID (AutoNumber, PK)
+   - LogTimestamp (Date/Time)
+   - EventType (Text 50) - e.g., "SeqReservationRetry", "LockTimeout"
+   - Details (Text 255)
+   - UserName (Text 100)
+   - ComputerName (Text 100)
+   
+2. Auto-populate UserName from Environ("USERNAME") if not provided
+3. Auto-populate ComputerName from Environ("COMPUTERNAME")
+4. Handle errors silently (logging failure shouldn't crash app)
+5. Add a query qryConcurrencyLog_Last24Hours to view recent events
+
+Then update basSeqAllocator.ReserveSeq to log when retries occur:
+- Call LogConcurrencyEvent "SeqReservationRetry", "[retry count] for [scope/base/qualifier]"
+```
+
+**Validation:**
+
+- [ ] Table tblConcurrencyLog created
+- [ ] Test logging works
+- [ ] Query shows logged events
+- [ ] Log doesn’t interfere with normal operation
+
+-----
+
+## Phase 3: Deployment Infrastructure (HIGH)
+
+### Priority: 🟡 HIGH
+
+### Time Estimate: 3-4 hours
+
+### Risk if Skipped: Difficult updates, version confusion, support issues
+
+### 3.1 Implement Version Tracking
+
+**What:** Track frontend version to manage updates
+
+**Copilot Prompt:**
+
+```
+Create a version tracking system for the Access frontend.
+
+1. Create table tblAppVersion with fields:
+   - VersionNumber (Text 20) - e.g., "1.0.0"
+   - ReleaseDate (Date/Time)
+   - ReleaseNotes (Memo)
+   - IsActive (Yes/No)
+
+2. Create module basVersion with functions:
+   Public Function GetCurrentVersion() As String
+   Public Sub SetVersion(ByVal versionNumber As String, ByVal releaseNotes As String)
+   Public Function CompareVersions(ByVal version1 As String, ByVal version2 As String) As Long
+   
+3. CompareVersions should return:
+   - Negative if version1 < version2
+   - Zero if version1 = version2  
+   - Positive if version1 > version2
+   
+Parse versions as semantic versioning (major.minor.patch).
+
+4. Create form frmAbout to display:
+   - Current version number
+   - Release date
+   - Release notes
+   - Database path information
+   - User information
+```
+
+**Validation:**
+
+- [ ] Can set and retrieve version
+- [ ] Version comparison works correctly (test: 1.0.0 < 1.1.0 < 2.0.0)
+- [ ] About form displays correctly
+
+-----
+
+### 3.2 Create Auto-Update Mechanism
+
+**What:** Check for new frontend version on startup and prompt user to update
+
+**Copilot Prompt:**
+
+```
+Create an auto-update system in module basAutoUpdate.
+
+Requirements:
+1. Function CheckForUpdates() that:
+   - Compares local version to template version on network share
+   - Template path from tblConfig table (ConfigKey = "FE_TemplatePath")
+   - Shows message if update available with release notes
+   - Offers to update now or remind later
+   
+2. Function PerformUpdate() that:
+   - Creates batch file in user's TEMP folder
+   - Batch file waits 2 seconds, copies template to local path, restarts Access
+   - Closes current Access instance
+   - Cleans up batch file after execution
+   
+3. Add update check to a startup form (Auto-Form_Load)
+
+4. Handle errors:
+   - Template not accessible (network down)
+   - User cancels update
+   - Copy fails (permission issue)
+
+5. Add "Skip this version" option that stores in local temp table
+
+Include the batch file template as a constant in the code with placeholders for paths.
+```
+
+**Batch File Template for Reference:**
+
+```batch
+@echo off
+echo Updating Access Frontend...
+timeout /t 2 /nobreak > nul
+copy /Y "[TEMPLATE_PATH]" "[LOCAL_PATH]"
+if %errorlevel% == 0 (
+    echo Update successful
+    start "" "[LOCAL_PATH]"
+) else (
+    echo Update failed
+    pause
+)
+del "%~f0"
+```
+
+**Validation:**
+
+- [ ] Update check runs on startup
+- [ ] Template version detected correctly
+- [ ] Update process completes successfully
+- [ ] Application restarts after update
+- [ ] “Skip version” works
+
+-----
+
+### 3.3 Create Deployment Checklist
+
+**What:** Document the deployment process
+
+Create file: `DEPLOYMENT_CHECKLIST.md`
+
+**Copilot Prompt:**
+
+```
+Create a deployment checklist markdown file for deploying frontend updates.
+
+Include sections for:
+1. Pre-Deployment
+   - Code freeze
+   - Testing completion
+   - Version number update
+   - Release notes drafted
+   - Backup of current production
+
+2. Deployment Steps
+   - Update FE_TEMPLATE version
+   - Copy to network location
+   - Test template opens correctly
+   - Notify users of available update
+   - Monitor update adoption
+
+3. Post-Deployment
+   - Verify users updated
+   - Check concurrency log for issues
+   - Monitor error reports
+   - Document any issues
+
+4. Rollback Plan
+   - Steps to revert to previous version
+   - When to trigger rollback
+
+Use checkboxes for each step.
+```
+
+-----
+
+## Phase 4: Testing & Validation (HIGH)
+
+### Priority: 🟡 HIGH
+
+### Time Estimate: 2-3 hours
+
+### Risk if Skipped: Production issues, user frustration, data problems
+
+### 4.1 Create Concurrency Test Harness
+
+**What:** Automated tests for multi-user scenarios
+
+**Copilot Prompt:**
+
+```
+Create module basTestConcurrency with comprehensive test functions.
+
+1. TestSequenceReservation()
+   - Reserves 50 sequences for SALES orders
+   - Tracks timing
+   - Checks for duplicates
+   - Reports results to Immediate window
+   
+2. TestConcurrentBatchCreation()
+   - Simulates creating a batch with 10 qualifiers
+   - Each qualifier gets 5 orders
+   - Validates all sequences are unique
+   - Validates order numbers are correctly formatted
+   
+3. StressTest()
+   - Shows username prompt
+   - Instructs to run on multiple computers simultaneously
+   - Runs TestSequenceReservation
+   - Shows completion message
+   
+4. ValidateOrderSequences()
+   - Checks SalesOrders table for duplicate order numbers
+   - Checks OrderSeq table for gaps or anomalies
+   - Reports findings
+
+Include detailed Debug.Print statements showing progress and results.
+Add error handling to report failures clearly.
+```
+
+**Manual Test Plan:**
+
+Create document: `MULTI_USER_TEST_PLAN.md`
+
+|Test Case                          |Steps                                   |Expected Result                         |Pass/Fail|
+|-----------------------------------|----------------------------------------|----------------------------------------|---------|
+|TC-001: Single User Order Creation |Create batch with 5 qualifiers, 3 each  |15 orders created, no duplicates        |[ ]      |
+|TC-002: Simultaneous Batch Creation|2 users click Commit Batch at same time |All orders unique, no errors            |[ ]      |
+|TC-003: Rapid Sequential Creation  |1 user creates 5 batches quickly        |All sequences correct and sequential    |[ ]      |
+|TC-004: Network Interruption       |Disconnect network during batch creation|Clear error message, no corruption      |[ ]      |
+|TC-005: Version Update             |User updates while another user working |Update succeeds, other user not affected|[ ]      |
+
+**Validation:**
+
+- [ ] All test functions run without errors
+- [ ] Stress test run on 2 computers simultaneously
+- [ ] Manual test plan completed
+- [ ] No duplicates found in any test
+
+-----
+
+### 4.2 Create User Acceptance Test Plan
+
+**What:** Guided scenarios for end users to validate
+
+Create file: `UAT_PLAN.md`
+
+**Copilot Prompt:**
+
+```
+Create a user acceptance test plan document for 4 sales users.
+
+Structure:
+1. Introduction
+   - Purpose of testing
+   - Timeline (suggest 1 week UAT)
+   - Who to contact for issues
+   
+2. Test Scenarios (realistic workflows)
+   - Create new sales order batch
+   - Create new project order batch
+   - View orders in list
+   - Filter orders by customer
+   - Mark order as billed
+   - Cancel an order
+   - Create backorder
+   
+3. For each scenario:
+   - Step-by-step instructions
+   - Expected results
+   - Space for notes/issues
+   - Pass/Fail checkbox
+   
+4. Feedback Form
+   - Usability questions
+   - Performance questions
+   - Bug reporting format
+   
+Use simple language appropriate for non-technical users.
+```
+
+-----
+
+## Phase 5: Production Rollout (MEDIUM)
+
+### Priority: 🟢 MEDIUM
+
+### Time Estimate: 1-2 hours
+
+### Risk if Skipped: Chaotic rollout, user confusion
+
+### 5.1 Prepare Production Environment
+
+**Checklist:**
+
+- [ ] Backend deployed to `\\server\share\Q1019\Backend\Q1019_BE.accdb`
+- [ ] Backend permissions set (Users: Read, Admin: Write)
+- [ ] Frontend template deployed to `\\server\share\Q1019\FrontEnd\Q1019_FE_TEMPLATE.accdb`
+- [ ] tblConfig updated with correct paths
+- [ ] Version set to 1.0.0
+- [ ] Release notes written
+
+**Network Path Setup:**
+
+Create file: `NETWORK_PATHS.md`
+
+```markdown
+# Q1019 Database Network Paths
+
+## Backend (Data)
+Path: `\\server\share\Q1019\Backend\Q1019_BE.accdb`
+Permissions: 
+- Sales Users: Read, Write (on folder)
+- Sales Admins: Full Control
+
+## Frontend Template
+Path: `\\server\share\Q1019\FrontEnd\Q1019_FE_TEMPLATE.accdb`
+Permissions:
+- Sales Users: Read
+- Sales Admins: Full Control
+
+## User Installations
+Each user copies frontend to:
+`C:\Users\[USERNAME]\Documents\Q1019\Q1019_FE.accdb`
+
+## Backup Location
+Daily backend backups to:
+`\\server\share\Q1019\Backups\Q1019_BE_YYYYMMDD.accdb`
+```
+
+-----
+
+### 5.2 Create User Documentation
+
+**Copilot Prompt:**
+
+```
+Create end-user documentation for the Q1019 Order Management System.
+
+File: USER_GUIDE.md
+
+Include:
+1. Getting Started
+   - How to install frontend
+   - First-time setup
+   - Checking for updates
+   
+2. Common Tasks
+   - Creating a sales order batch
+   - Creating a project order batch
+   - Viewing and filtering orders
+   - Marking orders as billed
+   - Canceling orders
+   
+3. Troubleshooting
+   - "Database is locked" error
+   - "Can't find backend" error
+   - Slow performance
+   - Update issues
+   
+4. Best Practices
+   - When to create batches vs. individual orders
+   - How to name projects
+   - Backup recommendations
+   
+5. Support
+   - Who to contact
+   - How to report bugs
+   - Feature requests
+
+Use screenshots (placeholders for now) and simple language.
+Include a "Quick Reference Card" section with common shortcuts.
+```
+
+-----
+
+### 5.3 Conduct Training Session
+
+**Training Agenda (1 hour):**
+
+1. **Introduction (5 min)**
+- Why we’re moving to multi-user system
+- Benefits for users
+1. **Installation Demo (10 min)**
+- Copy frontend from network share
+- Open and verify connection
+- Check version
+1. **Core Workflow Demo (25 min)**
+- Create sales order batch (hands-on)
+- Create project order batch (hands-on)
+- View and filter orders
+- Mark as billed
+1. **Multi-User Considerations (10 min)**
+- What happens when multiple users work simultaneously
+- Understanding “please try again” messages
+- When to contact IT/admin
+1. **Q&A (10 min)**
+
+**Materials Needed:**
+
+- [ ] Projector/screen sharing
+- [ ] Test database for practice
+- [ ] Handout with quick reference
+- [ ] Feedback form
+
+-----
+
+## Phase 6: Monitoring & Maintenance (ONGOING)
+
+### Priority: 🟢 ONGOING
+
+### Time Estimate: 1 hour/week initially, then 30 min/week
+
+### 6.1 Weekly Monitoring Checklist
+
+Create file: `WEEKLY_MONITORING.md`
+
+- [ ] Check tblConcurrencyLog for unusual patterns
+- [ ] Review OrderSeq table for gaps or anomalies
+- [ ] Verify backend backup exists and is recent
+- [ ] Check backend file size (compact if > 100MB)
+- [ ] Review user feedback/bug reports
+- [ ] Check network share permissions still correct
+
+### 6.2 Create Admin Dashboard
+
+**Copilot Prompt:**
+
+```
+Create a form called frmAdminDashboard for database administrators.
+
+Display:
+1. System Health
+   - Current active users (from ldb file)
+   - Backend file size
+   - Last backup date
+   - Frontend version in use by each user
+   
+2. Recent Activity (Last 7 Days)
+   - Total orders created
+   - Orders by day (simple chart or numbers)
+   - Most active users
+   - Most common qualifiers
+   
+3. Concurrency Metrics
+   - Total sequence reservation retries
+   - Average retry count
+   - Peak concurrent users
+   
+4. Quick Actions (buttons)
+   - Compact Backend
+   - Create Backup
+   - Refresh Table Links
+   - View Concurrency Log
+   - Export Data for Analysis
+   
+Use queries to calculate metrics efficiently.
+Include refresh button to update all metrics.
+```
+
+### 6.3 Setup Automated Backups
+
+**Options:**
+
+**Option A: Windows Task Scheduler (Recommended)**
+
+Create file: `BACKUP_SCRIPT.bat`
+
+```batch
+@echo off
+setlocal
+
+:: Configuration
+set BE_PATH=\\server\share\Q1019\Backend\Q1019_BE.accdb
+set BACKUP_PATH=\\server\share\Q1019\Backups
+set DATE=%date:~10,4%%date:~4,2%%date:~7,2%
+set TIME=%time:~0,2%%time:~3,2%
+set TIME=%TIME: =0%
+
+:: Create backup
+echo Backing up Access database...
+copy "%BE_PATH%" "%BACKUP_PATH%\Q1019_BE_%DATE%_%TIME%.accdb"
+
+if %errorlevel% == 0 (
+    echo Backup successful: Q1019_BE_%DATE%_%TIME%.accdb
+) else (
+    echo Backup failed!
+)
+
+:: Delete backups older than 30 days
+forfiles /p "%BACKUP_PATH%" /m Q1019_BE_*.accdb /d -30 /c "cmd /c del @path"
+
+endlocal
+```
+
+**Schedule:** Daily at 2:00 AM
+
+**Option B: VBA-Based Backup**
+
+**Copilot Prompt:**
+
+```
+Create module basBackupScheduler with automated backup functionality.
+
+Function: ScheduleDailyBackup()
+- Runs on application startup
+- Checks if backup has run today
+- If not, creates backup to configured path
+- Logs backup status to tblBackupLog
+- Shows brief notification to user
+
+Table: tblBackupLog
+- BackupID (AutoNumber)
+- BackupDate (Date/Time)
+- BackupPath (Text)
+- FileSizeMB (Double)
+- Success (Yes/No)
+- ErrorMessage (Text)
+
+Include cleanup of backups older than 30 days.
+```
+
+-----
+
+## Appendix: Copilot Prompts
+
+### Quick Reference: All Copilot Prompts
+
+This section consolidates all Copilot prompts from above for easy copy-paste.
+
+-----
+
+#### Prompt 1: Backend Maintenance Tools
+
+```
+Create a VBA module called basBackendMaintenance with these functions:
+
+1. CompactBackend() - Compacts the linked backend database
+2. BackupBackend() - Creates timestamped backup of backend to specified folder
+3. RepairLinkedTables() - Refreshes all table links if backend path changes
+
+The backend path should be configurable via a table called tblConfig with fields:
+- ConfigKey (Text)
+- ConfigValue (Text)
+
+Add error handling for network disconnections and file locks.
+```
+
+-----
+
+#### Prompt 2: Pessimistic Locking for Sequence Allocator
+
+```
+Review the basSeqAllocator module in my Access database.
+
+Update the ReserveSeq function to use pessimistic locking to prevent race conditions when multiple users reserve sequences simultaneously.
+
+Requirements:
+1. Use dbPessimistic flag when opening recordset
+2. Implement retry logic with up to 5 attempts
+3. Wait 500ms between retries using Windows Sleep API
+4. Handle error 3260 (record locked) gracefully with retry
+5. Raise clear error after max retries exceeded
+6. Add proper error handling for unexpected errors
+7. Add XML comments documenting the locking mechanism
+8. Preserve existing IsPreview parameter behavior
+
+For reference, the function signature is:
+Public Function ReserveSeq( _
+    ByVal Scope As String, _
+    ByVal BaseToken As String, _
+    ByVal QualifierCode As String, _
+    ByVal SystemLetter As String, _
+    Optional ByVal IsPreview As Boolean = False _
+) As Long
+
+Include the Windows API Sleep declaration at module level (handle both 32-bit and 64-bit).
+```
+
+-----
+
+#### Prompt 3: Refactor Convenience Wrappers
+
+```
+The basSeqAllocator module has three public functions for reserving sequences:
+- ReserveSeq (generic, already updated)
+- ReserveSalesSeq 
+- ReserveProjectSeq
+
+Update ReserveSalesSeq and ReserveProjectSeq to:
+1. Call the updated ReserveSeq function instead of duplicating logic
+2. Pass appropriate Scope parameter ("SALES" or "PROJECT")
+3. Maintain existing function signatures for backward compatibility
+4. Add brief comments explaining they are convenience wrappers
+
+Example for ReserveSalesSeq:
+Public Function ReserveSalesSeq(ByVal BaseToken As String, ByVal SystemLetter As String) As Long
+    ' Convenience wrapper for sales orders
+    ReserveSalesSeq = ReserveSeq("SALES", BaseToken, "", SystemLetter, False)
+End Function
+```
+
+-----
+
+#### Prompt 4: Concurrency Logging
+
+```
+Create a new module called basAuditLog with a function to log concurrency events.
+
+Function signature:
+Public Sub LogConcurrencyEvent( _
+    ByVal EventType As String, _
+    ByVal Details As String, _
+    Optional ByVal UserName As String = "" _
+)
+
+Requirements:
+1. Create table tblConcurrencyLog if it doesn't exist with fields:
+   - LogID (AutoNumber, PK)
+   - LogTimestamp (Date/Time)
+   - EventType (Text 50) - e.g., "SeqReservationRetry", "LockTimeout"
+   - Details (Text 255)
+   - UserName (Text 100)
+   - ComputerName (Text 100)
+   
+2. Auto-populate UserName from Environ("USERNAME") if not provided
+3. Auto-populate ComputerName from Environ("COMPUTERNAME")
+4. Handle errors silently (logging failure shouldn't crash app)
+5. Add a query qryConcurrencyLog_Last24Hours to view recent events
+
+Then update basSeqAllocator.ReserveSeq to log when retries occur:
+- Call LogConcurrencyEvent "SeqReservationRetry", "[retry count] for [scope/base/qualifier]"
+```
+
+-----
+
+#### Prompt 5: Version Tracking
+
+```
+Create a version tracking system for the Access frontend.
+
+1. Create table tblAppVersion with fields:
+   - VersionNumber (Text 20) - e.g., "1.0.0"
+   - ReleaseDate (Date/Time)
+   - ReleaseNotes (Memo)
+   - IsActive (Yes/No)
+
+2. Create module basVersion with functions:
+   Public Function GetCurrentVersion() As String
+   Public Sub SetVersion(ByVal versionNumber As String, ByVal releaseNotes As String)
+   Public Function CompareVersions(ByVal version1 As String, ByVal version2 As String) As Long
+   
+3. CompareVersions should return:
+   - Negative if version1 < version2
+   - Zero if version1 = version2  
+   - Positive if version1 > version2
+   
+Parse versions as semantic versioning (major.minor.patch).
+
+4. Create form frmAbout to display:
+   - Current version number
+   - Release date
+   - Release notes
+   - Database path information
+   - User information
+```
+
+-----
+
+#### Prompt 6: Auto-Update System
+
+```
+Create an auto-update system in module basAutoUpdate.
+
+Requirements:
+1. Function CheckForUpdates() that:
+   - Compares local version to template version on network share
+   - Template path from tblConfig table (ConfigKey = "FE_TemplatePath")
+   - Shows message if update available with release notes
+   - Offers to update now or remind later
+   
+2. Function PerformUpdate() that:
+   - Creates batch file in user's TEMP folder
+   - Batch file waits 2 seconds, copies template to local path, restarts Access
+   - Closes current Access instance
+   - Cleans up batch file after execution
+   
+3. Add update check to a startup form (Auto-Form_Load)
+
+4. Handle errors:
+   - Template not accessible (network down)
+   - User cancels update
+   - Copy fails (permission issue)
+
+5. Add "Skip this version" option that stores in local temp table
+
+Include the batch file template as a constant in the code with placeholders for paths.
+```
+
+-----
+
+#### Prompt 7: Deployment Checklist
+
+```
+Create a deployment checklist markdown file for deploying frontend updates.
+
+Include sections for:
+1. Pre-Deployment
+   - Code freeze
+   - Testing completion
+   - Version number update
+   - Release notes drafted
+   - Backup of current production
+
+2. Deployment Steps
+   - Update FE_TEMPLATE version
+   - Copy to network location
+   - Test template opens correctly
+   - Notify users of available update
+   - Monitor update adoption
+
+3. Post-Deployment
+   - Verify users updated
+   - Check concurrency log for issues
+   - Monitor error reports
+   - Document any issues
+
+4. Rollback Plan
+   - Steps to revert to previous version
+   - When to trigger rollback
+
+Use checkboxes for each step.
+```
+
+-----
+
+#### Prompt 8: Concurrency Test Harness
+
+```
+Create module basTestConcurrency with comprehensive test functions.
+
+1. TestSequenceReservation()
+   - Reserves 50 sequences for SALES orders
+   - Tracks timing
+   - Checks for duplicates
+   - Reports results to Immediate window
+   
+2. TestConcurrentBatchCreation()
+   - Simulates creating a batch with 10 qualifiers
+   - Each qualifier gets 5 orders
+   - Validates all sequences are unique
+   - Validates order numbers are correctly formatted
+   
+3. StressTest()
+   - Shows username prompt
+   - Instructs to run on multiple computers simultaneously
+   - Runs TestSequenceReservation
+   - Shows completion message
+   
+4. ValidateOrderSequences()
+   - Checks SalesOrders table for duplicate order numbers
+   - Checks OrderSeq table for gaps or anomalies
+   - Reports findings
+
+Include detailed Debug.Print statements showing progress and results.
+Add error handling to report failures clearly.
+```
+
+-----
+
+#### Prompt 9: User Acceptance Test Plan
+
+```
+Create a user acceptance test plan document for 4 sales users.
+
+Structure:
+1. Introduction
+   - Purpose of testing
+   - Timeline (suggest 1 week UAT)
+   - Who to contact for issues
+   
+2. Test Scenarios (realistic workflows)
+   - Create new sales order batch
+   - Create new project order batch
+   - View orders in list
+   - Filter orders by customer
+   - Mark order as billed
+   - Cancel an order
+   - Create backorder
+   
+3. For each scenario:
+   - Step-by-step instructions
+   - Expected results
+   - Space for notes/issues
+   - Pass/Fail checkbox
+   
+4. Feedback Form
+   - Usability questions
+   - Performance questions
+   - Bug reporting format
+   
+Use simple language appropriate for non-technical users.
+```
+
+-----
+
+#### Prompt 10: User Guide
+
+```
+Create end-user documentation for the Q1019 Order Management System.
+
+File: USER_GUIDE.md
+
+Include:
+1. Getting Started
+   - How to install frontend
+   - First-time setup
+   - Checking for updates
+   
+2. Common Tasks
+   - Creating a sales order batch
+   - Creating a project order batch
+   - Viewing and filtering orders
+   - Marking orders as billed
+   - Canceling orders
+   
+3. Troubleshooting
+   - "Database is locked" error
+   - "Can't find backend" error
+   - Slow performance
+   - Update issues
+   
+4. Best Practices
+   - When to create batches vs. individual orders
+   - How to name projects
+   - Backup recommendations
+   
+5. Support
+   - Who to contact
+   - How to report bugs
+   - Feature requests
+
+Use screenshots (placeholders for now) and simple language.
+Include a "Quick Reference Card" section with common shortcuts.
+```
+
+-----
+
+#### Prompt 11: Admin Dashboard
+
+```
+Create a form called frmAdminDashboard for database administrators.
+
+Display:
+1. System Health
+   - Current active users (from ldb file)
+   - Backend file size
+   - Last backup date
+   - Frontend version in use by each user
+   
+2. Recent Activity (Last 7 Days)
+   - Total orders created
+   - Orders by day (simple chart or numbers)
+   - Most active users
+   - Most common qualifiers
+   
+3. Concurrency Metrics
+   - Total sequence reservation retries
+   - Average retry count
+   - Peak concurrent users
+   
+4. Quick Actions (buttons)
+   - Compact Backend
+   - Create Backup
+   - Refresh Table Links
+   - View Concurrency Log
+   - Export Data for Analysis
+   
+Use queries to calculate metrics efficiently.
+Include refresh button to update all metrics.
+```
+
+-----
+
+#### Prompt 12: VBA-Based Backup
+
+```
+Create module basBackupScheduler with automated backup functionality.
+
+Function: ScheduleDailyBackup()
+- Runs on application startup
+- Checks if backup has run today
+- If not, creates backup to configured path
+- Logs backup status to tblBackupLog
+- Shows brief notification to user
+
+Table: tblBackupLog
+- BackupID (AutoNumber)
+- BackupDate (Date/Time)
+- BackupPath (Text)
+- FileSizeMB (Double)
+- Success (Yes/No)
+- ErrorMessage (Text)
+
+Include cleanup of backups older than 30 days.
+```
+
+-----
+
+## Decision Log
+
+Track major decisions and their rationale:
+
+|Date      |Decision                         |Rationale                                 |Decided By  |
+|----------|---------------------------------|------------------------------------------|------------|
+|2026-02-06|Split database architecture      |Prevent corruption with 4 concurrent users|Jay + Claude|
+|2026-02-06|Pessimistic locking for sequences|Guaranteed uniqueness vs. retry complexity|Jay + Claude|
+|          |                                 |                                          |            |
+|          |                                 |                                          |            |
+
+-----
+
+## Risk Register
+
+|Risk                               |Likelihood|Impact|Mitigation                                           |Owner|
+|-----------------------------------|----------|------|-----------------------------------------------------|-----|
+|Database corruption during split   |Low       |High  |Full backup before split, test on copy first         |Jay  |
+|Network share performance issues   |Medium    |Medium|Monitor after deployment, consider local BE if needed|Jay  |
+|User resistance to frontend updates|Medium    |Low   |Clear communication, training session                |Jay  |
+|Backend access conflicts           |Medium    |Medium|Pessimistic locking, concurrency logging             |Jay  |
+|                                   |          |      |                                                     |     |
+
+-----
+
+## Success Metrics
+
+How will we know this is working?
+
+1. **Technical Metrics**
+- Zero duplicate order numbers in production
+- < 5% of sequence reservations require retries
+- Backend file size grows linearly (no corruption bloat)
+- All users on current version within 48 hours of release
+1. **User Experience Metrics**
+- Average batch creation time < 10 seconds
+- < 1 support ticket per week related to concurrency
+- Users can create orders while others are active
+- Zero “database is corrupt” errors
+1. **Operational Metrics**
+- Successful daily backups (100%)
+- Frontend updates deployed without downtime
+- Admin time spent on DB maintenance < 2 hours/month
+
+-----
+
+## Notes & Lessons Learned
+
+Document insights as you go:
+
+- What worked well?
+- What would you do differently?
+- Unexpected issues encountered?
+- Tips for future Access projects?
+
+-----
+
+## Contact & Support
+
+**Database Administrator:** Jay  
+**Technical Issues:** [Your IT contact]  
+**Feature Requests:** [Your process]
+
+**Emergency Contacts:**
+
+- Database corruption: [Emergency procedure]
+- Network share down: [Fallback plan]
+- Critical bug: [Escalation path]
+
+-----
+
+**Document Version:** 1.0  
+**Last Updated:** February 6, 2026  
+**Next Review:** After Phase 4 completion
