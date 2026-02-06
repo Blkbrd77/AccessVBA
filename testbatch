@@ -1,0 +1,80 @@
+Private Sub TestBatchCreation()
+    ' Verify batch wizard functions exist
+    On Error GoTo TestFailed
+    
+    ' Better way: Check if the module exists
+    Dim modExists As Boolean
+    modExists = ModuleExists("basBatchWizard")
+    
+    If modExists Then
+        ' Module exists, now check if it has the CommitBatch function
+        ' We'll check by looking at the module's code
+        Dim hasFunction As Boolean
+        hasFunction = ModuleHasFunction("basBatchWizard", "CommitBatch")
+        
+        If hasFunction Then
+            LogTest "TestBatchCreation", "PASS", "Batch wizard module and CommitBatch function found"
+        Else
+            LogTest "TestBatchCreation", "FAIL", "basBatchWizard exists but CommitBatch function not found"
+        End If
+    Else
+        LogTest "TestBatchCreation", "FAIL", "basBatchWizard module not found"
+    End If
+    Exit Sub
+    
+TestFailed:
+    LogTest "TestBatchCreation", "FAIL", Err.Description
+End Sub
+
+Private Function ModuleExists(moduleName As String) As Boolean
+    ' Check if a VBA module exists
+    Dim i As Long
+    
+    On Error Resume Next
+    
+    ' Check standard modules
+    For i = 1 To Application.VBE.ActiveVBProject.VBComponents.Count
+        If Application.VBE.ActiveVBProject.VBComponents(i).Name = moduleName Then
+            ModuleExists = True
+            Exit Function
+        End If
+    Next
+    
+    ModuleExists = False
+    On Error GoTo 0
+End Function
+
+Private Function ModuleHasFunction(moduleName As String, functionName As String) As Boolean
+    ' Check if a module contains a specific function
+    Dim vbc As Object  ' VBComponent
+    Dim codeModule As Object
+    Dim i As Long
+    Dim lineText As String
+    
+    On Error Resume Next
+    
+    ' Get the module
+    Set vbc = Application.VBE.ActiveVBProject.VBComponents(moduleName)
+    
+    If vbc Is Nothing Then
+        ModuleHasFunction = False
+        Exit Function
+    End If
+    
+    Set codeModule = vbc.CodeModule
+    
+    ' Search for function declaration
+    For i = 1 To codeModule.CountOfLines
+        lineText = codeModule.Lines(i, 1)
+        
+        ' Check for function/sub declaration
+        If InStr(1, lineText, "Function " & functionName, vbTextCompare) > 0 Or _
+           InStr(1, lineText, "Sub " & functionName, vbTextCompare) > 0 Then
+            ModuleHasFunction = True
+            Exit Function
+        End If
+    Next
+    
+    ModuleHasFunction = False
+    On Error GoTo 0
+End Function
