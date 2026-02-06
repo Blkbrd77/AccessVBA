@@ -1,32 +1,100 @@
+Private Sub Form_Load()
+    ' Enhanced multi-user detection
+    If IsAnotherUserActive() Then
+        MsgBox "Another user is currently working in the database." & vbCrLf & vbCrLf & _
+               "To prevent data conflicts, only one user can create orders at a time." & vbCrLf & vbCrLf & _
+               "Please try again in a few minutes." & vbCrLf & vbCrLf & _
+               "Current user: " & Environ("USERNAME") & vbCrLf & _
+               "Computer: " & Environ("COMPUTERNAME"), _
+               vbExclamation + vbOKOnly, _
+               "Database In Use"
+        
+        DoCmd.Close acForm, Me.Name, acSaveNo
+    End If
+End Sub
+
 Private Function IsAnotherUserActive() As Boolean
-    ' More reliable method using .ldb lock file
+    ' Multiple detection methods for reliability
+    Dim userCount As Long
+    Dim ldbExists As Boolean
+    Dim ldbSize As Long
+    
+    ' Method 1: Check UserCount property
+    On Error Resume Next
+    userCount = CurrentDb.Properties("UserCount")
+    
+    If Err.Number = 0 And userCount > 1 Then
+        IsAnotherUserActive = True
+        Debug.Print "Detection: UserCount = " & userCount
+        Exit Function
+    End If
+    On Error GoTo 0
+    
+    ' Method 2: Check LDB file size
+    ldbExists = CheckLockFile(ldbSize)
+    
+    If ldbExists And ldbSize > 100 Then  ' More than one user entry
+        IsAnotherUserActive = True
+        Debug.Print "Detection: LDB file size = " & ldbSize
+        Exit Function
+    End If
+    
+    ' Method 3: Check if we can get exclusive access (most reliable)
+    If Not CanGetExclusiveAccess() Then
+        IsAnotherUserActive = True
+        Debug.Print "Detection: Cannot get exclusive access"
+        Exit Function
+    End If
+    
+    ' All checks passed - we're the only user
+    IsAnotherUserActive = False
+End Function
+
+Private Function CheckLockFile(ByRef fileSize As Long) As Boolean
+    ' Returns True if .ldb file exists, and sets fileSize
     Dim dbPath As String
     Dim ldbPath As String
     Dim fso As Object
-    Dim ldbFile As Object
-    Dim fileSize As Long
     
     On Error Resume Next
     
-    ' Get database path
     dbPath = CurrentDb.Name
-    
-    ' Replace .accdb with .ldb
     ldbPath = Left(dbPath, Len(dbPath) - 6) & ".ldb"
     
-    ' Check if lock file exists and has content
     Set fso = CreateObject("Scripting.FileSystemObject")
     
     If fso.FileExists(ldbPath) Then
-        Set ldbFile = fso.GetFile(ldbPath)
-        fileSize = ldbFile.Size
-        
-        ' LDB file with >64 bytes typically means multiple users
-        ' (Each user entry is ~64 bytes)
-        IsAnotherUserActive = (fileSize > 64)
+        fileSize = fso.GetFile(ldbPath).Size
+        CheckLockFile = True
     Else
-        ' No lock file = no other users
-        IsAnotherUserActive = False
+        fileSize = 0
+        CheckLockFile = False
+    End If
+    
+    On Error GoTo 0
+End Function
+
+Private Function CanGetExclusiveAccess() As Boolean
+    ' Try to open a dummy table exclusively
+    ' If another user is active, this will fail
+    Dim db As DAO.Database
+    Dim rs As DAO.Recordset
+    
+    On Error Resume Next
+    
+    Set db = CurrentDb
+    
+    ' Try to open a table with exclusive access
+    ' Pick a small table that always exists (like Customers)
+    Set rs = db.OpenRecordset("Customers", dbOpenTable, dbDenyWrite)
+    
+    If Err.Number = 0 Then
+        ' We could open exclusively - we're alone
+        rs.Close
+        CanGetExclusiveAccess = True
+    Else
+        ' Couldn't get exclusive access - someone else is here
+        CanGetExclusiveAccess = False
     End If
     
     On Error GoTo 0
