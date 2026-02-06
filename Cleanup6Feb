@@ -1,0 +1,1141 @@
+# Database Cleanup Guide - Pre-Split Preparation
+
+**Database:** Q1019_23Jan26_Start_travellaptop.accdb  
+**Purpose:** Remove deprecated objects safely before FE/BE split  
+**Created:** February 6, 2026
+
+-----
+
+## Table of Contents
+
+- [Pre-Cleanup Checklist](#pre-cleanup-checklist)
+- [Phase 1: Identify Deprecated Objects](#phase-1-identify-deprecated-objects)
+- [Phase 2: Create Safety Tests](#phase-2-create-safety-tests)
+- [Phase 3: Remove Deprecated Objects](#phase-3-remove-deprecated-objects)
+- [Phase 4: Clean Up Import Errors](#phase-4-clean-up-import-errors)
+- [Phase 5: Enable Auditing](#phase-5-enable-auditing)
+- [Phase 6: Hide System Tables](#phase-6-hide-system-tables)
+- [Phase 7: Final Validation](#phase-7-final-validation)
+- [Appendix: Rollback Procedures](#appendix-rollback-procedures)
+
+-----
+
+## Pre-Cleanup Checklist
+
+**CRITICAL: Complete these steps before making any changes**
+
+- [ ] **Full database backup created**
+  - Filename: `Q1019_BACKUP_[DATE]_PreCleanup.accdb`
+  - Location: Safe folder (NOT on network share)
+  - Verified: Backup opens successfully
+- [ ] **Database is NOT open by other users**
+  - Check for `.ldb` file in database folder
+  - If present, wait for other users to close
+- [ ] **Compact & Repair completed**
+  - Database Tools → Compact & Repair Database
+  - Note original file size: _________ MB
+- [ ] **All current work committed**
+  - No unsaved forms/reports/modules
+  - No pending data entry
+
+-----
+
+## Phase 1: Identify Deprecated Objects
+
+### 1.1 Tables to Evaluate
+
+Based on your database inventory, these tables are candidates for deprecation:
+
+#### High-Confidence Removal Candidates
+
+|Table                     |Rows|Status   |Used In                            |Decision                     |
+|--------------------------|----|---------|-----------------------------------|-----------------------------|
+|`SalesOrderQualifier`     |0   |Unused   |No queries, no relationships active|**REMOVE**                   |
+|`SalesOrderQualifierAudit`|0   |Unused   |No queries, no relationships active|**REMOVE**                   |
+|`tmpBatchPreview`         |0   |Temporary|Cleared after batch commit         |**KEEP** (working temp table)|
+
+#### Import Error Tables (Safe to Remove)
+
+|Table                                        |Purpose       |Decision                             |
+|---------------------------------------------|--------------|-------------------------------------|
+|`ImportTemplate_SalesOrderEntry_ImportErrors`|Import residue|**REMOVE** (recreated on next import)|
+|`ImportTemplate_SalesOrders1_ImportErrors`   |Import residue|**REMOVE** (recreated on next import)|
+
+#### Working Temp Tables (KEEP)
+
+|Table            |Purpose            |Decision|
+|-----------------|-------------------|--------|
+|`tmpQualifierQty`|Batch entry staging|**KEEP**|
+|`tmpBatchPreview`|Preview display    |**KEEP**|
+
+### 1.2 Verify Table Usage
+
+**Run this VBA code to confirm no references exist:**
+
+```vba
+Public Sub AnalyzeTableUsage(tableName As String)
+    ' Comprehensive check for table references
+    Dim db As DAO.Database
+    Dim qdf As DAO.QueryDef
+    Dim frm As AccessObject
+    Dim rpt As AccessObject
+    Dim foundIn As String
+    
+    Set db = CurrentDb
+    foundIn = ""
+    
+    Debug.Print "=== Analyzing Table: " & tableName & " ==="
+    Debug.Print ""
+    
+    ' Check queries
+    For Each qdf In db.QueryDefs
+        If InStr(1, qdf.SQL, tableName, vbTextCompare) > 0 Then
+            foundIn = foundIn & "QUERY: " & qdf.Name & vbCrLf
+        End If
+    Next
+    
+    ' Check forms
+    For Each frm In CurrentProject.AllForms
+        DoCmd.OpenForm frm.Name, acDesign, , , , acHidden
+        If InStr(1, Forms(frm.Name).RecordSource, tableName, vbTextCompare) > 0 Then
+            foundIn = foundIn & "FORM RecordSource: " & frm.Name & vbCrLf
+        End If
+        DoCmd.Close acForm, frm.Name, acSaveNo
+    Next
+    
+    ' Check reports
+    For Each rpt In CurrentProject.AllReports
+        DoCmd.OpenReport rpt.Name, acViewDesign
+        If InStr(1, Reports(rpt.Name).RecordSource, tableName, vbTextCompare) > 0 Then
+            foundIn = foundIn & "REPORT RecordSource: " & rpt.Name & vbCrLf
+        End If
+        DoCmd.Close acReport, rpt.Name, acSaveNo
+    Next
+    
+    ' Output results
+    If foundIn = "" Then
+        Debug.Print "✓ Table '" & tableName & "' is NOT referenced anywhere"
+        Debug.Print "SAFE TO REMOVE"
+    Else
+        Debug.Print "✗ Table '" & tableName & "' IS USED IN:"
+        Debug.Print foundIn
+        Debug.Print "DO NOT REMOVE"
+    End If
+    
+    Debug.Print ""
+    Debug.Print "=== Analysis Complete ==="
+End Sub
+```
+
+**Test each candidate table:**
+
+```vba
+' In Immediate Window (Ctrl+G):
+AnalyzeTableUsage "SalesOrderQualifier"
+AnalyzeTableUsage "SalesOrderQualifierAudit"
+AnalyzeTableUsage "ImportTemplate_SalesOrderEntry_ImportErrors"
+AnalyzeTableUsage "ImportTemplate_SalesOrders1_ImportErrors"
+```
+
+### 1.3 Check Relationships
+
+Before removing tables, verify their relationships won’t break anything:
+
+```vba
+Public Sub CheckTableRelationships(tableName As String)
+    ' Shows all relationships involving a table
+    Dim db As DAO.Database
+    Dim rel As DAO.Relation
+    Dim foundRels As Boolean
+    
+    Set db = CurrentDb
+    foundRels = False
+    
+    Debug.Print "=== Relationships for: " & tableName & " ==="
+    Debug.Print ""
+    
+    For Each rel In db.Relations
+        If rel.Table = tableName Or rel.ForeignTable = tableName Then
+            Debug.Print "Relationship: " & rel.Name
+            Debug.Print "  From: " & rel.Table & " → To: " & rel.ForeignTable
+            Debug.Print "  Attributes: " & rel.Attributes
+            Debug.Print ""
+            foundRels = True
+        End If
+    Next
+    
+    If Not foundRels Then
+        Debug.Print "✓ No relationships found"
+        Debug.Print "SAFE TO REMOVE"
+    End If
+    
+    Debug.Print "=== Check Complete ==="
+End Sub
+```
+
+**Test:**
+
+```vba
+' In Immediate Window:
+CheckTableRelationships "SalesOrderQualifier"
+CheckTableRelationships "SalesOrderQualifierAudit"
+```
+
+-----
+
+## Phase 2: Create Safety Tests
+
+### 2.1 Create Comprehensive Test Module
+
+**Create a new module: `basCleanupTests`**
+
+```vba
+Option Compare Database
+Option Explicit
+
+' Test results tracking
+Private TestResults As Collection
+
+Public Sub RunAllCleanupTests()
+    ' Master test suite - run before and after cleanup
+    Dim startTime As Double
+    Dim passCount As Long
+    Dim failCount As Long
+    Dim i As Long
+    
+    startTime = Timer
+    Set TestResults = New Collection
+    
+    Debug.Print "========================================="
+    Debug.Print "DATABASE CLEANUP TEST SUITE"
+    Debug.Print "Started: " & Now
+    Debug.Print "========================================="
+    Debug.Print ""
+    
+    ' Run all tests
+    Call TestCoreTablesExist
+    Call TestRelationshipsIntact
+    Call TestOrderCreationWorkflow
+    Call TestSequenceAllocation
+    Call TestBatchCreation
+    Call TestOrderListQuery
+    Call TestFormRecordSources
+    
+    ' Summarize results
+    Debug.Print ""
+    Debug.Print "========================================="
+    Debug.Print "TEST SUMMARY"
+    Debug.Print "========================================="
+    
+    For i = 1 To TestResults.Count
+        If TestResults(i) = "PASS" Then
+            passCount = passCount + 1
+        Else
+            failCount = failCount + 1
+        End If
+    Next
+    
+    Debug.Print "Total Tests: " & TestResults.Count
+    Debug.Print "Passed: " & passCount
+    Debug.Print "Failed: " & failCount
+    Debug.Print "Duration: " & Format(Timer - startTime, "0.00") & " seconds"
+    Debug.Print ""
+    
+    If failCount = 0 Then
+        Debug.Print "✓ ALL TESTS PASSED - Safe to proceed"
+    Else
+        Debug.Print "✗ TESTS FAILED - DO NOT PROCEED with cleanup"
+    End If
+    
+    Debug.Print "========================================="
+End Sub
+
+Private Sub LogTest(testName As String, result As String, Optional details As String = "")
+    Debug.Print testName & ": " & result
+    If details <> "" Then Debug.Print "  → " & details
+    TestResults.Add result
+End Sub
+
+Private Sub TestCoreTablesExist()
+    ' Verify critical tables exist
+    Dim db As DAO.Database
+    Dim coreTables As Variant
+    Dim i As Long
+    Dim allExist As Boolean
+    
+    Set db = CurrentDb
+    coreTables = Array("SalesOrders", "SalesOrderEntry", "OrderSeq", _
+                       "QualifierType", "Customers", "Projects", "SystemLetter")
+    
+    allExist = True
+    
+    For i = LBound(coreTables) To UBound(coreTables)
+        On Error Resume Next
+        Dim tbl As DAO.TableDef
+        Set tbl = db.TableDefs(coreTables(i))
+        
+        If Err.Number <> 0 Then
+            LogTest "TestCoreTablesExist", "FAIL", "Missing table: " & coreTables(i)
+            allExist = False
+            Exit Sub
+        End If
+        On Error GoTo 0
+    Next
+    
+    If allExist Then
+        LogTest "TestCoreTablesExist", "PASS", "All 7 core tables present"
+    End If
+End Sub
+
+Private Sub TestRelationshipsIntact()
+    ' Verify critical relationships exist
+    Dim db As DAO.Database
+    Dim rel As DAO.Relation
+    Dim criticalRels As Long
+    
+    Set db = CurrentDb
+    criticalRels = 0
+    
+    ' Count expected relationships
+    For Each rel In db.Relations
+        If (rel.Table = "SalesOrders" And rel.ForeignTable = "SalesOrderEntry") Or _
+           (rel.Table = "SystemLetter" And rel.ForeignTable = "SalesOrders") Then
+            criticalRels = criticalRels + 1
+        End If
+    Next
+    
+    If criticalRels >= 2 Then
+        LogTest "TestRelationshipsIntact", "PASS", criticalRels & " critical relationships verified"
+    Else
+        LogTest "TestRelationshipsIntact", "FAIL", "Expected 2+ relationships, found " & criticalRels
+    End If
+End Sub
+
+Private Sub TestOrderCreationWorkflow()
+    ' Verify we can create a test order
+    Dim db As DAO.Database
+    Dim rs As DAO.Recordset
+    Dim testSOID As Long
+    
+    On Error GoTo TestFailed
+    
+    Set db = CurrentDb
+    Set rs = db.OpenRecordset("SalesOrders", dbOpenDynaset)
+    
+    ' Create test order
+    rs.AddNew
+    rs!OrderType = "SALES"
+    rs!BaseToken = "999999"
+    rs!SystemLetter = "N"
+    rs!CustomerName = "TEST CUSTOMER"
+    rs!PONumber = "TEST-CLEANUP"
+    rs!DateReceived = Date
+    rs!ActiveFlag = True
+    rs.Update
+    
+    ' Get the ID
+    rs.Bookmark = rs.LastModified
+    testSOID = rs!SOID
+    rs.Close
+    
+    ' Clean up test order
+    db.Execute "DELETE FROM SalesOrders WHERE SOID = " & testSOID, dbFailOnError
+    
+    LogTest "TestOrderCreationWorkflow", "PASS", "Test order created and deleted successfully"
+    Exit Sub
+    
+TestFailed:
+    LogTest "TestOrderCreationWorkflow", "FAIL", Err.Description
+End Sub
+
+Private Sub TestSequenceAllocation()
+    ' Verify sequence allocation works
+    Dim seq As Long
+    
+    On Error GoTo TestFailed
+    
+    ' This assumes basSeqAllocator exists
+    seq = ReserveSeq("TEST", "999999", "XX", "N", True)  ' Preview mode
+    
+    If seq > 0 Then
+        LogTest "TestSequenceAllocation", "PASS", "Reserved sequence: " & seq
+    Else
+        LogTest "TestSequenceAllocation", "FAIL", "Sequence allocation returned 0"
+    End If
+    Exit Sub
+    
+TestFailed:
+    LogTest "TestSequenceAllocation", "FAIL", Err.Description
+End Sub
+
+Private Sub TestBatchCreation()
+    ' Verify batch wizard functions exist
+    On Error GoTo TestFailed
+    
+    ' Check that key functions exist
+    Dim result As Boolean
+    result = FunctionExists("basBatchWizard", "CommitBatch")
+    
+    If result Then
+        LogTest "TestBatchCreation", "PASS", "Batch wizard functions accessible"
+    Else
+        LogTest "TestBatchCreation", "FAIL", "Missing batch wizard functions"
+    End If
+    Exit Sub
+    
+TestFailed:
+    LogTest "TestBatchCreation", "FAIL", Err.Description
+End Sub
+
+Private Sub TestOrderListQuery()
+    ' Verify main queries work
+    Dim db As DAO.Database
+    Dim qdf As DAO.QueryDef
+    Dim rs As DAO.Recordset
+    
+    On Error GoTo TestFailed
+    
+    Set db = CurrentDb
+    Set qdf = db.QueryDefs("qryOrderList_Base")
+    Set rs = qdf.OpenRecordset(dbOpenSnapshot)
+    
+    ' Query should execute without error
+    rs.Close
+    
+    LogTest "TestOrderListQuery", "PASS", "Order list query executes successfully"
+    Exit Sub
+    
+TestFailed:
+    LogTest "TestOrderListQuery", "FAIL", Err.Description
+End Sub
+
+Private Sub TestFormRecordSources()
+    ' Verify critical forms can open
+    Dim forms As Variant
+    Dim i As Long
+    Dim allOpen As Boolean
+    
+    On Error GoTo TestFailed
+    
+    forms = Array("frmSalesOrderEntry", "frmOrderList")
+    allOpen = True
+    
+    For i = LBound(forms) To UBound(forms)
+        DoCmd.OpenForm forms(i), acDesign, , , , acHidden
+        DoCmd.Close acForm, forms(i), acSaveNo
+    Next
+    
+    LogTest "TestFormRecordSources", "PASS", "All critical forms open without errors"
+    Exit Sub
+    
+TestFailed:
+    LogTest "TestFormRecordSources", "FAIL", Err.Description
+    On Error Resume Next
+    DoCmd.Close acForm, "", acSaveNo
+End Sub
+
+Private Function FunctionExists(moduleName As String, functionName As String) As Boolean
+    ' Check if a VBA function exists
+    On Error Resume Next
+    Dim result As Variant
+    result = Eval(functionName & "()")
+    FunctionExists = (Err.Number = 0 Or Err.Number = 450)  ' 450 = wrong number of arguments (function exists)
+    On Error GoTo 0
+End Function
+```
+
+### 2.2 Run Baseline Tests
+
+**Before making ANY changes:**
+
+```vba
+' In Immediate Window:
+RunAllCleanupTests
+```
+
+**Save the output** (Copy from Immediate Window to a text file: `TEST_RESULTS_BEFORE_CLEANUP.txt`)
+
+-----
+
+## Phase 3: Remove Deprecated Objects
+
+### 3.1 Remove Deprecated Tables
+
+**Only proceed if Phase 1 and Phase 2 tests confirm safety**
+
+#### Manual Removal (Recommended for first time)
+
+1. **Close all forms and reports**
+1. **For each table identified as safe to remove:**
+- Right-click table in Navigation Pane
+- Select “Delete”
+- Click “Yes” to confirm
+1. **Order of removal:**
+   
+   ```
+   1. ImportTemplate_SalesOrderEntry_ImportErrors
+   2. ImportTemplate_SalesOrders1_ImportErrors
+   3. SalesOrderQualifierAudit (if verified unused)
+   4. SalesOrderQualifier (if verified unused)
+   ```
+
+#### Automated Removal (Use with caution)
+
+```vba
+Public Sub RemoveDeprecatedTables()
+    ' CAUTION: This permanently deletes tables
+    ' Only run after verification in Phase 1 & Phase 2
+    
+    Dim db As DAO.Database
+    Dim tablesToRemove As Variant
+    Dim i As Long
+    Dim confirmMsg As String
+    
+    tablesToRemove = Array( _
+        "ImportTemplate_SalesOrderEntry_ImportErrors", _
+        "ImportTemplate_SalesOrders1_ImportErrors", _
+        "SalesOrderQualifier", _
+        "SalesOrderQualifierAudit" _
+    )
+    
+    confirmMsg = "This will PERMANENTLY delete " & (UBound(tablesToRemove) + 1) & " tables:" & vbCrLf & vbCrLf
+    
+    For i = LBound(tablesToRemove) To UBound(tablesToRemove)
+        confirmMsg = confirmMsg & "  • " & tablesToRemove(i) & vbCrLf
+    Next
+    
+    confirmMsg = confirmMsg & vbCrLf & "Do you want to proceed?"
+    
+    If MsgBox(confirmMsg, vbYesNo + vbExclamation, "Confirm Table Deletion") = vbNo Then
+        Debug.Print "Operation cancelled by user"
+        Exit Sub
+    End If
+    
+    Set db = CurrentDb
+    
+    ' Delete each table
+    For i = LBound(tablesToRemove) To UBound(tablesToRemove)
+        On Error Resume Next
+        db.TableDefs.Delete tablesToRemove(i)
+        
+        If Err.Number = 0 Then
+            Debug.Print "✓ Deleted: " & tablesToRemove(i)
+        Else
+            Debug.Print "✗ Failed to delete: " & tablesToRemove(i) & " (" & Err.Description & ")"
+        End If
+        On Error GoTo 0
+    Next
+    
+    Debug.Print ""
+    Debug.Print "Table cleanup complete"
+End Sub
+```
+
+### 3.2 Immediate Post-Removal Test
+
+**After removing tables, immediately run:**
+
+```vba
+' In Immediate Window:
+RunAllCleanupTests
+```
+
+**If ANY test fails:**
+
+1. **STOP immediately**
+1. **Close the database WITHOUT saving**
+1. **Restore from your backup**
+1. **Investigate which table removal caused the failure**
+
+-----
+
+## Phase 4: Clean Up Import Errors
+
+### 4.1 Understanding Import Error Tables
+
+Import error tables are automatically created by Access when CSV/Excel imports have issues. They’re safe to delete because:
+
+- They’re regenerated on next import if errors occur
+- They contain no production data
+- They’re not referenced by any queries or forms
+
+### 4.2 Prevent Future Import Error Accumulation
+
+**Create a cleanup routine to run after imports:**
+
+```vba
+Public Sub CleanupImportErrors()
+    ' Removes all import error tables
+    Dim db As DAO.Database
+    Dim tdf As DAO.TableDef
+    Dim deletedCount As Long
+    
+    Set db = CurrentDb
+    deletedCount = 0
+    
+    For Each tdf In db.TableDefs
+        ' Import error tables end with "_ImportErrors"
+        If Right(tdf.Name, 13) = "_ImportErrors" Then
+            On Error Resume Next
+            db.TableDefs.Delete tdf.Name
+            If Err.Number = 0 Then
+                Debug.Print "Deleted import error table: " & tdf.Name
+                deletedCount = deletedCount + 1
+            End If
+            On Error GoTo 0
+        End If
+    Next
+    
+    Debug.Print ""
+    Debug.Print "Cleanup complete: " & deletedCount & " import error table(s) removed"
+End Sub
+```
+
+**Run this periodically** or add to your import routines.
+
+-----
+
+## Phase 5: Enable Auditing
+
+### Decision: Before or After Split?
+
+**RECOMMENDATION: Enable auditing BEFORE the split**
+
+**Why:**
+
+1. ✅ Audit tables belong in the **backend** with your data
+1. ✅ Easier to test auditing in single-file database
+1. ✅ Auditing gets automatically included in backend during split
+1. ✅ You can validate it works before adding split complexity
+
+**Do NOT enable auditing after split because:**
+
+- ❌ You’d have to manually add audit tables to backend
+- ❌ You’d have to update all linked tables
+- ❌ More complex to test and validate
+
+### 5.1 Create Audit Infrastructure
+
+**Create these audit tables in your current database:**
+
+```vba
+Public Sub CreateAuditTables()
+    ' Creates comprehensive audit infrastructure
+    Dim db As DAO.Database
+    Dim tdf As DAO.TableDef
+    Dim fld As DAO.Field
+    
+    Set db = CurrentDb
+    
+    ' ===== tblAuditLog (General audit trail) =====
+    On Error Resume Next
+    db.TableDefs.Delete "tblAuditLog"
+    On Error GoTo 0
+    
+    Set tdf = db.CreateTableDef("tblAuditLog")
+    
+    With tdf
+        ' Primary key
+        Set fld = .CreateField("AuditID", dbLong)
+        fld.Attributes = dbAutoIncrField
+        .Fields.Append fld
+        
+        ' Audit details
+        .Fields.Append .CreateField("AuditTimestamp", dbDate)
+        .Fields.Append .CreateField("TableName", dbText, 100)
+        .Fields.Append .CreateField("RecordID", dbLong)
+        .Fields.Append .CreateField("Action", dbText, 20)  ' INSERT, UPDATE, DELETE, CANCEL
+        .Fields.Append .CreateField("FieldName", dbText, 100)
+        .Fields.Append .CreateField("OldValue", dbText, 255)
+        .Fields.Append .CreateField("NewValue", dbText, 255)
+        .Fields.Append .CreateField("UserName", dbText, 100)
+        .Fields.Append .CreateField("ComputerName", dbText, 100)
+        .Fields.Append .CreateField("Notes", dbMemo)
+    End With
+    
+    db.TableDefs.Append tdf
+    
+    ' Create primary key index
+    Dim idx As DAO.Index
+    Set idx = tdf.CreateIndex("PrimaryKey")
+    idx.Primary = True
+    idx.Fields.Append idx.CreateField("AuditID")
+    tdf.Indexes.Append idx
+    
+    Debug.Print "✓ Created: tblAuditLog"
+    
+    ' ===== tblOrderAudit (Specific to orders) =====
+    On Error Resume Next
+    db.TableDefs.Delete "tblOrderAudit"
+    On Error GoTo 0
+    
+    Set tdf = db.CreateTableDef("tblOrderAudit")
+    
+    With tdf
+        Set fld = .CreateField("OrderAuditID", dbLong)
+        fld.Attributes = dbAutoIncrField
+        .Fields.Append fld
+        
+        .Fields.Append .CreateField("SOID", dbLong)
+        .Fields.Append .CreateField("OrderNumber", dbText, 50)
+        .Fields.Append .CreateField("Action", dbText, 20)
+        .Fields.Append .CreateField("ActionTimestamp", dbDate)
+        .Fields.Append .CreateField("ActionBy", dbText, 100)
+        .Fields.Append .CreateField("ComputerName", dbText, 100)
+        .Fields.Append .CreateField("OldStatus", dbText, 50)
+        .Fields.Append .CreateField("NewStatus", dbText, 50)
+        .Fields.Append .CreateField("Reason", dbMemo)
+    End With
+    
+    db.TableDefs.Append tdf
+    
+    Set idx = tdf.CreateIndex("PrimaryKey")
+    idx.Primary = True
+    idx.Fields.Append idx.CreateField("OrderAuditID")
+    tdf.Indexes.Append idx
+    
+    Debug.Print "✓ Created: tblOrderAudit"
+    
+    ' ===== tblConcurrencyLog (Already created in action plan) =====
+    On Error Resume Next
+    db.TableDefs.Delete "tblConcurrencyLog"
+    On Error GoTo 0
+    
+    Set tdf = db.CreateTableDef("tblConcurrencyLog")
+    
+    With tdf
+        Set fld = .CreateField("LogID", dbLong)
+        fld.Attributes = dbAutoIncrField
+        .Fields.Append fld
+        
+        .Fields.Append .CreateField("LogTimestamp", dbDate)
+        .Fields.Append .CreateField("EventType", dbText, 50)
+        .Fields.Append .CreateField("Details", dbText, 255)
+        .Fields.Append .CreateField("UserName", dbText, 100)
+        .Fields.Append .CreateField("ComputerName", dbText, 100)
+    End With
+    
+    db.TableDefs.Append tdf
+    
+    Set idx = tdf.CreateIndex("PrimaryKey")
+    idx.Primary = True
+    idx.Fields.Append idx.CreateField("LogID")
+    tdf.Indexes.Append idx
+    
+    Debug.Print "✓ Created: tblConcurrencyLog"
+    
+    Debug.Print ""
+    Debug.Print "Audit infrastructure created successfully"
+End Sub
+```
+
+### 5.2 Create Audit Logging Module
+
+**Create module: `basAudit`**
+
+```vba
+Option Compare Database
+Option Explicit
+
+Public Sub LogAudit( _
+    ByVal tableName As String, _
+    ByVal recordID As Long, _
+    ByVal action As String, _
+    Optional ByVal fieldName As String = "", _
+    Optional ByVal oldValue As String = "", _
+    Optional ByVal newValue As String = "", _
+    Optional ByVal notes As String = "" _
+)
+    ' General-purpose audit logging
+    Dim db As DAO.Database
+    Dim rs As DAO.Recordset
+    
+    On Error Resume Next  ' Don't crash app if logging fails
+    
+    Set db = CurrentDb
+    Set rs = db.OpenRecordset("tblAuditLog", dbOpenDynaset)
+    
+    rs.AddNew
+    rs!AuditTimestamp = Now
+    rs!TableName = tableName
+    rs!RecordID = recordID
+    rs!Action = action
+    rs!FieldName = fieldName
+    rs!OldValue = Left(oldValue, 255)  ' Truncate to field size
+    rs!NewValue = Left(newValue, 255)
+    rs!UserName = Environ("USERNAME")
+    rs!ComputerName = Environ("COMPUTERNAME")
+    rs!Notes = notes
+    rs.Update
+    
+    rs.Close
+    
+    ' Silently ignore errors
+    On Error GoTo 0
+End Sub
+
+Public Sub LogOrderAction( _
+    ByVal SOID As Long, _
+    ByVal orderNumber As String, _
+    ByVal action As String, _
+    Optional ByVal oldStatus As String = "", _
+    Optional ByVal newStatus As String = "", _
+    Optional ByVal reason As String = "" _
+)
+    ' Order-specific audit logging
+    Dim db As DAO.Database
+    Dim rs As DAO.Recordset
+    
+    On Error Resume Next
+    
+    Set db = CurrentDb
+    Set rs = db.OpenRecordset("tblOrderAudit", dbOpenDynaset)
+    
+    rs.AddNew
+    rs!SOID = SOID
+    rs!OrderNumber = orderNumber
+    rs!Action = action
+    rs!ActionTimestamp = Now
+    rs!ActionBy = Environ("USERNAME")
+    rs!ComputerName = Environ("COMPUTERNAME")
+    rs!OldStatus = oldStatus
+    rs!NewStatus = newStatus
+    rs!Reason = reason
+    rs.Update
+    
+    rs.Close
+    
+    On Error GoTo 0
+End Sub
+```
+
+### 5.3 Integrate Auditing into Existing Code
+
+**Example: Add to order cancellation routine**
+
+```vba
+' In your existing cancel order code, add:
+Public Sub CancelOrder(ByVal SOID As Long, ByVal reason As String)
+    Dim db As DAO.Database
+    Dim rs As DAO.Recordset
+    Dim orderNumber As String
+    
+    Set db = CurrentDb
+    Set rs = db.OpenRecordset("SELECT * FROM SalesOrders WHERE SOID = " & SOID, dbOpenDynaset)
+    
+    If Not rs.EOF Then
+        orderNumber = rs!OrderNumber
+        
+        rs.Edit
+        rs!ActiveFlag = False
+        rs!DateCanceled = Now
+        rs!CanceledBy = Environ("USERNAME")
+        rs!CancelReason = reason
+        rs.Update
+        
+        ' ===== ADD AUDIT LOG HERE =====
+        Call LogOrderAction(SOID, orderNumber, "CANCEL", "Active", "Canceled", reason)
+        ' ==============================
+    End If
+    
+    rs.Close
+End Sub
+```
+
+### 5.4 Create Audit Queries
+
+```sql
+-- Query: qryAuditLog_Recent
+-- Shows last 100 audit entries
+SELECT TOP 100
+    AuditTimestamp,
+    TableName,
+    RecordID,
+    Action,
+    FieldName,
+    OldValue,
+    NewValue,
+    UserName,
+    ComputerName
+FROM tblAuditLog
+ORDER BY AuditTimestamp DESC;
+
+-- Query: qryOrderAudit_Recent
+-- Shows recent order actions
+SELECT TOP 100
+    ActionTimestamp,
+    OrderNumber,
+    Action,
+    ActionBy,
+    OldStatus,
+    NewStatus,
+    Reason
+FROM tblOrderAudit
+ORDER BY ActionTimestamp DESC;
+
+-- Query: qryAuditLog_ByUser
+-- Audit trail grouped by user
+SELECT 
+    UserName,
+    TableName,
+    Action,
+    COUNT(*) AS ActionCount,
+    MAX(AuditTimestamp) AS LastAction
+FROM tblAuditLog
+GROUP BY UserName, TableName, Action
+ORDER BY UserName, TableName, Action;
+```
+
+### 5.5 Test Auditing
+
+```vba
+Public Sub TestAuditSystem()
+    Debug.Print "=== Testing Audit System ==="
+    Debug.Print ""
+    
+    ' Test general audit log
+    Call LogAudit("TestTable", 123, "TEST", "TestField", "OldVal", "NewVal", "Test audit entry")
+    Debug.Print "✓ General audit log test complete"
+    
+    ' Test order audit log
+    Call LogOrderAction(999, "TEST-001", "TEST", "Active", "Canceled", "Testing audit system")
+    Debug.Print "✓ Order audit log test complete"
+    
+    ' Verify entries were created
+    Dim db As DAO.Database
+    Dim rs As DAO.Recordset
+    
+    Set db = CurrentDb
+    Set rs = db.OpenRecordset("SELECT COUNT(*) AS Cnt FROM tblAuditLog WHERE TableName = 'TestTable'")
+    Debug.Print "  Audit entries in tblAuditLog: " & rs!Cnt
+    rs.Close
+    
+    Set rs = db.OpenRecordset("SELECT COUNT(*) AS Cnt FROM tblOrderAudit WHERE OrderNumber = 'TEST-001'")
+    Debug.Print "  Audit entries in tblOrderAudit: " & rs!Cnt
+    rs.Close
+    
+    ' Clean up test data
+    db.Execute "DELETE FROM tblAuditLog WHERE TableName = 'TestTable'", dbFailOnError
+    db.Execute "DELETE FROM tblOrderAudit WHERE OrderNumber = 'TEST-001'", dbFailOnError
+    
+    Debug.Print ""
+    Debug.Print "=== Audit System Test Complete ==="
+End Sub
+```
+
+-----
+
+## Phase 6: Hide System Tables
+
+### 6.1 Why You See System Tables
+
+You probably enabled “Show System Objects” at some point to debug or explore the database structure.
+
+### 6.2 Hide System Tables (Quick Method)
+
+**Method 1: Access Options (Recommended)**
+
+1. **File → Options**
+1. **Current Database**
+1. **Navigation section**
+1. **Uncheck: “Show System Objects”**
+1. **Click OK**
+1. **Close and reopen Access**
+
+System tables (MSys*) will now be hidden.
+
+### 6.3 Hide Specific Tables (Advanced)
+
+If you want to hide specific tables (like your temp tables) from regular users:
+
+```vba
+Public Sub HideTable(tableName As String)
+    ' Makes a table hidden in Navigation Pane
+    Dim db As DAO.Database
+    Dim tdf As DAO.TableDef
+    
+    Set db = CurrentDb
+    Set tdf = db.TableDefs(tableName)
+    
+    ' Set hidden attribute
+    tdf.Attributes = tdf.Attributes Or dbHiddenObject
+    
+    Debug.Print "✓ Table hidden: " & tableName
+End Sub
+
+Public Sub ShowTable(tableName As String)
+    ' Makes a hidden table visible
+    Dim db As DAO.Database
+    Dim tdf As DAO.TableDef
+    
+    Set db = CurrentDb
+    Set tdf = db.TableDefs(tableName)
+    
+    ' Remove hidden attribute
+    tdf.Attributes = tdf.Attributes And Not dbHiddenObject
+    
+    Debug.Print "✓ Table visible: " & tableName
+End Sub
+```
+
+**Example: Hide temp tables from users**
+
+```vba
+' In Immediate Window:
+HideTable "tmpQualifierQty"
+HideTable "tmpBatchPreview"
+```
+
+**To see hidden tables again:**
+
+File → Options → Current Database → Check “Show Hidden Objects”
+
+-----
+
+## Phase 7: Final Validation
+
+### 7.1 Run Complete Test Suite Again
+
+```vba
+' In Immediate Window:
+RunAllCleanupTests
+```
+
+**Compare results with your baseline from Phase 2**
+
+- All tests should still PASS
+- No new failures
+
+### 7.2 Manual Validation Checklist
+
+- [ ] **Open each critical form**
+  - frmSalesOrderEntry
+  - frmOrderList
+  - All forms open without errors
+- [ ] **Create a test batch**
+  - Use 3 qualifiers, 2 each = 6 orders
+  - Verify all sequences are unique
+  - Verify orders appear in frmOrderList
+- [ ] **Check audit logs**
+  - Open tblOrderAudit
+  - Verify your test batch was logged
+- [ ] **Verify cleanup worked**
+  - Deprecated tables are gone
+  - No import error tables visible
+  - System tables hidden (if desired)
+- [ ] **Compact & Repair**
+  - Database Tools → Compact & Repair Database
+  - Note new file size: _________ MB
+  - Should be smaller than before
+
+### 7.3 Document Changes
+
+**Create a cleanup log:**
+
+```
+DATABASE CLEANUP LOG
+Date: [Today's date]
+Performed by: Jay
+
+REMOVED TABLES:
+- SalesOrderQualifier (0 rows, unused)
+- SalesOrderQualifierAudit (0 rows, unused)
+- ImportTemplate_SalesOrderEntry_ImportErrors (21 rows, import residue)
+- ImportTemplate_SalesOrders1_ImportErrors (44 rows, import residue)
+
+ADDED TABLES:
+- tblAuditLog (general audit trail)
+- tblOrderAudit (order-specific audit)
+- tblConcurrencyLog (multi-user monitoring)
+
+HIDDEN TABLES:
+- tmpQualifierQty
+- tmpBatchPreview
+
+FILE SIZE:
+- Before: _____ MB
+- After: _____ MB
+- Reduction: _____ MB
+
+ALL TESTS PASSED: Yes/No
+
+READY FOR FE/BE SPLIT: Yes/No
+```
+
+-----
+
+## Appendix: Rollback Procedures
+
+### If Something Goes Wrong
+
+**Scenario 1: Test failures immediately after table removal**
+
+1. **Close Access WITHOUT saving**
+- File → Close (or X button)
+- If prompted “Save changes?”, click **NO**
+1. **Restore from backup**
+- Copy your `Q1019_BACKUP_[DATE]_PreCleanup.accdb`
+- Rename to working filename
+- Reopen and verify
+1. **Investigate**
+- Which test failed?
+- Which table removal caused it?
+- Was that table actually in use?
+
+**Scenario 2: Issues discovered later**
+
+1. **Keep your backup** for at least 2 weeks after cleanup
+1. **If you need to rollback:**
+- Identify what data was created in cleaned database
+- Export new data to Excel/CSV
+- Restore from backup
+- Import new data back in
+
+### Recovery Checklist
+
+- [ ] Backup file accessible and opens correctly
+- [ ] Know which version was last good
+- [ ] Documented what changes were made
+- [ ] Can identify any new data to preserve
+
+-----
+
+## Pre-Split Final Checklist
+
+Before proceeding to FE/BE split (from your Multi-User Action Plan):
+
+- [ ] **All cleanup tests pass**
+- [ ] **Audit system tested and working**
+- [ ] **System tables hidden (optional)**
+- [ ] **Database compacted**
+- [ ] **All deprecated objects removed**
+- [ ] **Final backup created**
+  - Filename: `Q1019_BACKUP_[DATE]_PreSplit.accdb`
+  - This is your last single-file backup!
+- [ ] **Documentation updated**
+  - Cleanup log completed
+  - Table inventory updated
+  - Relationships verified
+
+**When all items checked, you’re ready for Phase 1 of the Multi-User Action Plan!**
+
+-----
+
+## Summary Timeline
+
+|Phase    |Task                       |Time Estimate|
+|---------|---------------------------|-------------|
+|1        |Identify deprecated objects|30 min       |
+|2        |Create safety tests        |45 min       |
+|3        |Remove deprecated objects  |15 min       |
+|4        |Clean up import errors     |10 min       |
+|5        |Enable auditing            |1 hour       |
+|6        |Hide system tables         |5 min        |
+|7        |Final validation           |30 min       |
+|**TOTAL**|                           |**3-4 hours**|
+
+-----
+
+**Document Version:** 1.0  
+**Created:** February 6, 2026  
+**Next Step:** Multi-User Action Plan Phase 1 (Database Split)
