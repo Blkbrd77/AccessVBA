@@ -1,11 +1,32 @@
 Private Sub Form_Load()
-    ' Enhanced multi-user detection
-    If IsAnotherUserActive() Then
+    ' TESTING VERSION - Shows detailed diagnostics
+    Dim userCount As Long
+    Dim ldbInfo As String
+    Dim isActive As Boolean
+    
+    ' Get user count
+    On Error Resume Next
+    userCount = CurrentDb.Properties("UserCount")
+    On Error GoTo 0
+    
+    ' Check detection result
+    isActive = IsAnotherUserActive()
+    
+    ' Build diagnostic message
+    ldbInfo = "=== MULTI-USER DETECTION TEST ===" & vbCrLf & vbCrLf
+    ldbInfo = ldbInfo & "Current User: " & Environ("USERNAME") & vbCrLf
+    ldbInfo = ldbInfo & "Computer: " & Environ("COMPUTERNAME") & vbCrLf
+    ldbInfo = ldbInfo & "UserCount Property: " & userCount & vbCrLf
+    ldbInfo = ldbInfo & "Another User Active: " & isActive & vbCrLf
+    
+    ' ALWAYS show this message during testing
+    MsgBox ldbInfo, vbInformation, "Database Status"
+    
+    ' If another user is detected, close the form
+    If isActive Then
         MsgBox "Another user is currently working in the database." & vbCrLf & vbCrLf & _
                "To prevent data conflicts, only one user can create orders at a time." & vbCrLf & vbCrLf & _
-               "Please try again in a few minutes." & vbCrLf & vbCrLf & _
-               "Current user: " & Environ("USERNAME") & vbCrLf & _
-               "Computer: " & Environ("COMPUTERNAME"), _
+               "Please try again in a few minutes.", _
                vbExclamation + vbOKOnly, _
                "Database In Use"
         
@@ -14,18 +35,17 @@ Private Sub Form_Load()
 End Sub
 
 Private Function IsAnotherUserActive() As Boolean
-    ' Multiple detection methods for reliability
     Dim userCount As Long
-    Dim ldbExists As Boolean
     Dim ldbSize As Long
+    Dim ldbExists As Boolean
     
-    ' Method 1: Check UserCount property
+    ' Method 1: Check UserCount
     On Error Resume Next
     userCount = CurrentDb.Properties("UserCount")
     
     If Err.Number = 0 And userCount > 1 Then
+        Debug.Print "Detection Method: UserCount = " & userCount
         IsAnotherUserActive = True
-        Debug.Print "Detection: UserCount = " & userCount
         Exit Function
     End If
     On Error GoTo 0
@@ -33,25 +53,17 @@ Private Function IsAnotherUserActive() As Boolean
     ' Method 2: Check LDB file size
     ldbExists = CheckLockFile(ldbSize)
     
-    If ldbExists And ldbSize > 100 Then  ' More than one user entry
+    If ldbExists And ldbSize > 100 Then
+        Debug.Print "Detection Method: LDB file size = " & ldbSize & " bytes"
         IsAnotherUserActive = True
-        Debug.Print "Detection: LDB file size = " & ldbSize
         Exit Function
     End If
     
-    ' Method 3: Check if we can get exclusive access (most reliable)
-    If Not CanGetExclusiveAccess() Then
-        IsAnotherUserActive = True
-        Debug.Print "Detection: Cannot get exclusive access"
-        Exit Function
-    End If
-    
-    ' All checks passed - we're the only user
+    Debug.Print "No other users detected"
     IsAnotherUserActive = False
 End Function
 
 Private Function CheckLockFile(ByRef fileSize As Long) As Boolean
-    ' Returns True if .ldb file exists, and sets fileSize
     Dim dbPath As String
     Dim ldbPath As String
     Dim fso As Object
@@ -66,35 +78,11 @@ Private Function CheckLockFile(ByRef fileSize As Long) As Boolean
     If fso.FileExists(ldbPath) Then
         fileSize = fso.GetFile(ldbPath).Size
         CheckLockFile = True
+        Debug.Print "LDB file found: " & ldbPath & " (" & fileSize & " bytes)"
     Else
         fileSize = 0
         CheckLockFile = False
-    End If
-    
-    On Error GoTo 0
-End Function
-
-Private Function CanGetExclusiveAccess() As Boolean
-    ' Try to open a dummy table exclusively
-    ' If another user is active, this will fail
-    Dim db As DAO.Database
-    Dim rs As DAO.Recordset
-    
-    On Error Resume Next
-    
-    Set db = CurrentDb
-    
-    ' Try to open a table with exclusive access
-    ' Pick a small table that always exists (like Customers)
-    Set rs = db.OpenRecordset("Customers", dbOpenTable, dbDenyWrite)
-    
-    If Err.Number = 0 Then
-        ' We could open exclusively - we're alone
-        rs.Close
-        CanGetExclusiveAccess = True
-    Else
-        ' Couldn't get exclusive access - someone else is here
-        CanGetExclusiveAccess = False
+        Debug.Print "LDB file not found"
     End If
     
     On Error GoTo 0
