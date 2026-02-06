@@ -1,28 +1,36 @@
 Private Sub Form_Load()
-    ' TESTING VERSION - Shows detailed diagnostics
-    Dim userCount As Long
-    Dim ldbInfo As String
+    ' TESTING VERSION - Uses LDB file detection
+    Dim ldbSize As Long
+    Dim ldbPath As String
+    Dim msg As String
     Dim isActive As Boolean
     
-    ' Get user count
-    On Error Resume Next
-    userCount = CurrentDb.Properties("UserCount")
-    On Error GoTo 0
+    ' Get LDB file info
+    ldbPath = GetLDBPath()
+    ldbSize = GetLDBFileSize()
     
-    ' Check detection result
-    isActive = IsAnotherUserActive()
+    ' Determine if another user is active
+    ' Each user takes ~64 bytes in the LDB file
+    ' If file is > 100 bytes, multiple users are connected
+    isActive = (ldbSize > 100)
     
     ' Build diagnostic message
-    ldbInfo = "=== MULTI-USER DETECTION TEST ===" & vbCrLf & vbCrLf
-    ldbInfo = ldbInfo & "Current User: " & Environ("USERNAME") & vbCrLf
-    ldbInfo = ldbInfo & "Computer: " & Environ("COMPUTERNAME") & vbCrLf
-    ldbInfo = ldbInfo & "UserCount Property: " & userCount & vbCrLf
-    ldbInfo = ldbInfo & "Another User Active: " & isActive & vbCrLf
+    msg = "=== MULTI-USER DETECTION TEST ===" & vbCrLf & vbCrLf
+    msg = msg & "Current User: " & Environ("USERNAME") & vbCrLf
+    msg = msg & "Computer: " & Environ("COMPUTERNAME") & vbCrLf
+    msg = msg & "LDB File Size: " & ldbSize & " bytes" & vbCrLf
+    msg = msg & "LDB Path: " & ldbPath & vbCrLf & vbCrLf
     
-    ' ALWAYS show this message during testing
-    MsgBox ldbInfo, vbInformation, "Database Status"
+    If ldbSize > 0 Then
+        msg = msg & "Estimated Users: " & Int(ldbSize / 64) & vbCrLf
+    End If
     
-    ' If another user is detected, close the form
+    msg = msg & "Another User Active: " & isActive
+    
+    ' ALWAYS show diagnostic during testing
+    MsgBox msg, vbInformation, "Database Status"
+    
+    ' If another user detected, close form
     If isActive Then
         MsgBox "Another user is currently working in the database." & vbCrLf & vbCrLf & _
                "To prevent data conflicts, only one user can create orders at a time." & vbCrLf & vbCrLf & _
@@ -34,55 +42,31 @@ Private Sub Form_Load()
     End If
 End Sub
 
-Private Function IsAnotherUserActive() As Boolean
-    Dim userCount As Long
-    Dim ldbSize As Long
-    Dim ldbExists As Boolean
+Private Function GetLDBPath() As String
+    ' Returns the path to the LDB lock file
+    Dim dbPath As String
     
-    ' Method 1: Check UserCount
-    On Error Resume Next
-    userCount = CurrentDb.Properties("UserCount")
+    dbPath = CurrentDb.Name
     
-    If Err.Number = 0 And userCount > 1 Then
-        Debug.Print "Detection Method: UserCount = " & userCount
-        IsAnotherUserActive = True
-        Exit Function
-    End If
-    On Error GoTo 0
-    
-    ' Method 2: Check LDB file size
-    ldbExists = CheckLockFile(ldbSize)
-    
-    If ldbExists And ldbSize > 100 Then
-        Debug.Print "Detection Method: LDB file size = " & ldbSize & " bytes"
-        IsAnotherUserActive = True
-        Exit Function
-    End If
-    
-    Debug.Print "No other users detected"
-    IsAnotherUserActive = False
+    ' Replace .accdb extension with .ldb
+    GetLDBPath = Left(dbPath, Len(dbPath) - 6) & ".ldb"
 End Function
 
-Private Function CheckLockFile(ByRef fileSize As Long) As Boolean
-    Dim dbPath As String
+Private Function GetLDBFileSize() As Long
+    ' Returns the size of the LDB file in bytes
+    ' Returns 0 if file doesn't exist
     Dim ldbPath As String
     Dim fso As Object
     
     On Error Resume Next
     
-    dbPath = CurrentDb.Name
-    ldbPath = Left(dbPath, Len(dbPath) - 6) & ".ldb"
-    
+    ldbPath = GetLDBPath()
     Set fso = CreateObject("Scripting.FileSystemObject")
     
     If fso.FileExists(ldbPath) Then
-        fileSize = fso.GetFile(ldbPath).Size
-        CheckLockFile = True
-        Debug.Print "LDB file found: " & ldbPath & " (" & fileSize & " bytes)"
+        GetLDBFileSize = fso.GetFile(ldbPath).Size
     Else
-        fileSize = 0
-        CheckLockFile = False
-        Debug.Print "LDB file not found"
+        GetLDBFileSize = 0
     End If
     
     On Error GoTo 0
