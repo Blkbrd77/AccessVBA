@@ -1,0 +1,33 @@
+Private Function IsAnotherUserActive() As Boolean
+    ' More reliable method using .ldb lock file
+    Dim dbPath As String
+    Dim ldbPath As String
+    Dim fso As Object
+    Dim ldbFile As Object
+    Dim fileSize As Long
+    
+    On Error Resume Next
+    
+    ' Get database path
+    dbPath = CurrentDb.Name
+    
+    ' Replace .accdb with .ldb
+    ldbPath = Left(dbPath, Len(dbPath) - 6) & ".ldb"
+    
+    ' Check if lock file exists and has content
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    
+    If fso.FileExists(ldbPath) Then
+        Set ldbFile = fso.GetFile(ldbPath)
+        fileSize = ldbFile.Size
+        
+        ' LDB file with >64 bytes typically means multiple users
+        ' (Each user entry is ~64 bytes)
+        IsAnotherUserActive = (fileSize > 64)
+    Else
+        ' No lock file = no other users
+        IsAnotherUserActive = False
+    End If
+    
+    On Error GoTo 0
+End Function
