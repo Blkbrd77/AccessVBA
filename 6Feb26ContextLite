@@ -1,6 +1,6 @@
-# AI CONTEXT LITE - 2Feb26databaseDemo.accdb
-Generated: 2/2/2026 5:28:13 PM
-Tables: 13 | Queries: 6 | Forms: 8 | Modules: 23
+# AI CONTEXT LITE - 4Feb26databaseDemoProdDataDev.accdb
+Generated: 2/6/2026 9:09:41 AM
+Tables: 13 | Queries: 7 | Forms: 8 | Modules: 23
 ------------------------------------------------------------
 
 ## TABLES
@@ -22,7 +22,7 @@ Tables: 13 | Queries: 6 | Forms: 8 | Modules: 23
   Field: Text
   Row: Long
 
-### OrderSeq (53 rows)
+### OrderSeq (55 rows)
   Scope: Text(10)
   BaseToken: Text(32)
   QualifierCode: Text(10)
@@ -48,7 +48,7 @@ Tables: 13 | Queries: 6 | Forms: 8 | Modules: 23
   Notes: Memo
   PK: QCID
 
-### SalesOrderEntry (54 rows)
+### SalesOrderEntry (56 rows)
   SOEntryID: Long
   SOID: Long DEFAULT 0
   OrderNumberDisplay: Text(50)
@@ -82,7 +82,7 @@ Tables: 13 | Queries: 6 | Forms: 8 | Modules: 23
   Reason: Memo
   PK: SOQAuditID
 
-### SalesOrders (54 rows)
+### SalesOrders (56 rows)
   SOID: Long
   OrderType: Text(10)
   BaseToken: Text(50)
@@ -185,9 +185,16 @@ WHERE IsDeleted = 0
 
 ### qryOrderList_Base
 ```sql
-SELECT S.SOID, S.OrderNumber, S.CustomerName, S.CustomerCode, S.PONumber, S.DateReceived, S.DateBilled, S.BaseToken, S.SystemLetter, S.BackorderNo, S.BatchID, Q.QualifierCode, Q.SequenceNo
-FROM SalesOrders AS S LEFT JOIN qryFirstQualifierOnly AS Q ON S.SOID = Q.SOID
+SELECT S.SOID, S.OrderNumber, S.CustomerName, S.CustomerCode, S.PONumber, S.DateReceived, S.DateBilled, S.BaseToken, S.SystemLetter, S.BackorderNo, S.BatchID, Q.QualifierCode, QT.QualifierName, Q.SequenceNo
+FROM (SalesOrders AS S LEFT JOIN qryFirstQualifierOnly AS Q ON S.SOID = Q.SOID) LEFT JOIN QualifierType AS QT ON Q.QualifierCode = QT.QualifierCode
 WHERE S.ActiveFlag = True;
+
+```
+
+### qryOrderList_BaseAll
+```sql
+SELECT S.SOID, S.OrderNumber, S.CustomerName, S.CustomerCode, S.PONumber, S.DateReceived, S.DateBilled, S.BaseToken, S.SystemLetter, S.BackorderNo, S.BatchID, S.ActiveFlag, S.CanceledBy, S.CancelReason, S.DateCanceled, Q.QualifierCode, QT.QualifierName, Q.SequenceNo
+FROM (SalesOrders AS S LEFT JOIN qryFirstQualifierOnly AS Q ON S.SOID = Q.SOID) LEFT JOIN QualifierType AS QT ON Q.QualifierCode = QT.QualifierCode;
 
 ```
 
@@ -213,17 +220,17 @@ Controls:
 HasCode: Yes
 
 ### frmOrderList
-RecordSource: SELECT * FROM (  SELECT     Q.*,     DCount('*', 'SalesOrders', 'SOID >= ' & Q.SOID) AS RowNum   FROM qryOrderList_Base AS Q ) AS X WHERE X.RowNum BETWEEN 1 AND 25 ORDER BY X.SOID DESC;
+RecordSource: SELECT * FROM (  SELECT     Q.*,     DCount('*', 'SalesOrders',       'SOID >= ' & Q.SOID & ' AND ActiveFlag=True'    ) AS RowNum   FROM qryOrderList_BaseAll AS Q   WHERE Q.ActiveFlag = True ) AS X WHERE X.RowNum BETWEEN 1 AND 25 ORDER BY X.SOID DESC;
 Controls:
   txtOrderNumberDisplay <- OrderNumber
   txtCustomerName <- CustomerName
   txtPONumber <- PONumber
   txtDateReceived <- DateReceived
-  txtQualifierCode <- QualifierCode
-  Text51 <- SequenceNo
-  Text54 <- BaseToken
-  txtDateBilled <- DateBilled
+  txtQualifierName <- QualifierName
   txtStampDate <- =UCase(Format([DateBilled],"mmm ")) & Left(Format([DateBilled],"dd"),1) & " " & Right(Format([DateBilled],"dd"),1) & " " & Format([DateBilled],"yyyy")
+  txtCanceledBy <- CanceledBy
+  txtDateCanceled <- DateCanceled
+  txtCancelReason <- CancelReason
 HasCode: Yes
 
 ### dlgStampBilledDate
@@ -338,7 +345,6 @@ HasCode: Yes
   - ImportTemplate_SalesOrderEntry_ImportErrors
   - ImportTemplate_SalesOrders1_ImportErrors
   - OrderSeq
-  - QualifierType
   - SalesOrderQualifier
   - SalesOrderQualifierAudit
 
