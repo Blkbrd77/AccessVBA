@@ -1,0 +1,5370 @@
+ALL VBA MODULES DUMP
+Database: \\hmc-dc01\Users\JSAMPLES\Q-1019_Database\6Feb25FE_BESplit.accdb
+Generated: 2026-02-11 15:23:42
+================================================================================
+
+--------------------------------------------------------------------------------
+NAME:  Form_z_Deprecated_frmSalesOrderEntry
+TYPE:  Document(Form/Report)
+LINES: 289
+FILE:  Form_z_Deprecated_frmSalesOrderEntry.cls
+--------------------------------------------------------------------------------
+
+Option Compare Database
+Option Explicit
+
+'==========================
+' Guard flags
+'==========================
+Private mAllowProgrammaticSave As Boolean  ' True only when we explicitly save
+Private mSuppressDefaultError As Boolean   ' True when we cancel save on purpose
+
+'==========================
+' Utilities
+'==========================
+Private Function IsEffectivelyEmpty() As Boolean
+    ' Minimal fields that make a record "non-empty" (tune as needed)
+    Dim hasAny As Boolean
+    hasAny = False
+
+    hasAny = hasAny Or Len(Nz(Me.cboOrderType, "")) > 0
+    hasAny = hasAny Or Len(Nz(Me.txtBaseToken, "")) > 0
+    hasAny = hasAny Or Len(Nz(Me.cboCustomerCode, "")) > 0
+    hasAny = hasAny Or Len(Nz(Me.txtCustomerName, "")) > 0
+    hasAny = hasAny Or Len(Nz(Me.txtPONumber, "")) > 0
+    hasAny = hasAny Or Not IsNull(Me.txtDateReceived)
+
+    IsEffectivelyEmpty = (hasAny = False)
+End Function
+
+Private Function ConfirmDiscard() As VbMsgBoxResult
+    ConfirmDiscard = MsgBox( _
+        "You have unsaved changes. What would you like to do?" & vbCrLf & vbCrLf & _
+        "Yes = Save and close" & vbCrLf & _
+        "No  = Discard changes" & vbCrLf & _
+        "Cancel = Return to the form", _
+        vbYesNoCancel + vbQuestion, _
+        "Unsaved changes")
+End Function
+
+Private Sub cmdAddQualifiers_Click()
+
+On Error GoTo EH
+    If IsNull(Me.SOID) Then Exit Sub
+    AssignOrderNumberIfReady CLng(Me.SOID)
+    If Not IsNull(Me.OrderNumber) And Len(Me.OrderNumber & "") > 0 Then
+        mAllowProgrammaticSave = True
+        If Me.Dirty Then Me.Dirty = False
+        mAllowProgrammaticSave = False
+        MsgBox "OrderNumber assigned: " & Me.OrderNumber, vbInformation
+    Else
+        MsgBox "Not ready: add a qualifier and ensure System Letter is set.", vbInformation
+    End If
+    Exit Sub
+EH:
+    MsgBox "Generate failed: " & Err.Description, vbExclamation
+
+End Sub
+
+'==========================
+' Lifecycle
+'==========================
+Private Sub Form_Load()
+    On Error GoTo EH
+
+    Dim arg As String
+    arg = Trim$(Nz(Me.OpenArgs, ""))
+
+    ' New-entry experience
+    Me.DataEntry = True
+    Me.AllowAdditions = True
+
+    Select Case True
+        Case (StrComp(arg, "SALES", vbTextCompare) = 0)
+            Me.cboOrderType = "SALES": Me.cboOrderType.Locked = True
+
+            Dim nextBT As Long
+            nextBT = NextSalesBaseToken()
+            If nextBT = 0 Then
+                MsgBox "Unable to determine next Sales BaseToken.", vbExclamation
+                DoCmd.Close acForm, Me.name
+                Exit Sub
+            End If
+
+            Me.txtBaseToken = CStr(nextBT): Me.txtBaseToken.Locked = False
+            Me.cboSystemLetter = DefaultSalesSystemLetter()
+            Me.txtBackOrderNo = 0
+
+        Case (Left$(arg, 8) = "PROJECT:")
+            Dim baseProj As String
+            baseProj = Mid$(arg, 9)
+            If Len(baseProj) = 0 Then
+                MsgBox "Project BaseToken was not supplied.", vbExclamation
+                DoCmd.Close acForm, Me.name
+                Exit Sub
+            End If
+
+            Me.cboOrderType = "PROJECT": Me.cboOrderType.Locked = True
+            Me.txtBaseToken = baseProj:  Me.txtBaseToken.Locked = False
+            Me.cboSystemLetter = Null
+            Me.txtBackOrderNo = 0
+
+        Case Else
+            Debug.Print "frmSalesOrderEntry opened without OpenArgs."
+    End Select
+
+    Exit Sub
+EH:
+    MsgBox "frmSalesOrderEntry Load error: " & Err.Description, vbExclamation
+End Sub
+
+Private Sub Form_BeforeInsert(Cancel As Integer)
+    On Error Resume Next
+    If IsNull(Me.ActiveFlag) Then Me.ActiveFlag = True
+End Sub
+
+' ---------- VALIDATION + SAVE GATE ----------
+Private Sub Form_BeforeUpdate(Cancel As Integer)
+    On Error GoTo EH
+
+    ' *** Hard gate: block ALL commits unless explicitly saving ***
+    If Not mAllowProgrammaticSave Then
+        mSuppressDefaultError = True   ' tell Form_Error to suppress Access dialog
+        Cancel = True
+        Exit Sub
+    End If
+
+    ' Normalize OrderNumber to Null (unique index ignores Nulls)
+    If Len(Nz(Me.OrderNumber, "")) = 0 Then
+        Me.OrderNumber = Null
+    End If
+
+    Exit Sub
+EH:
+    Cancel = True
+    MsgBox "Save validation failed: " & Err.Description, vbExclamation
+End Sub
+
+' ---------- SUPPRESS ACCESS DEFAULT DIALOG WHEN WE CANCEL ON PURPOSE ----------
+Private Sub Form_Error(DataErr As Integer, Response As Integer)
+    On Error Resume Next
+    If mSuppressDefaultError Then
+        Response = acDataErrContinue
+        mSuppressDefaultError = False
+    End If
+End Sub
+
+' ---------- The ONLY place we prompt on close ----------
+Private Sub Form_Unload(Cancel As Integer)
+    On Error GoTo EH
+
+    If Me.Dirty Then
+        If IsEffectivelyEmpty() Then
+            ' Discard silently; prevents phantom/blank rows
+            DoCmd.RunCommand acCmdUndo
+        Else
+            Dim ans As VbMsgBoxResult
+            ans = ConfirmDiscard()
+            Select Case ans
+                Case vbYes
+                    ' Try to save using programmatic path
+                    mAllowProgrammaticSave = True
+                    If Me.Dirty Then Me.Dirty = False  ' triggers BeforeUpdate; allowed now
+                    mAllowProgrammaticSave = False
+
+                    ' If validation cancelled save, keep form open
+                    If Me.Dirty Then Cancel = True
+
+                Case vbNo
+                    ' Discard and close
+                    DoCmd.RunCommand acCmdUndo
+
+                Case vbCancel
+                    Cancel = True
+            End Select
+        End If
+    End If
+
+    Exit Sub
+EH:
+    Cancel = True
+    MsgBox "Close failed: " & Err.Description, vbExclamation
+End Sub
+
+'==========================
+' Commands
+'==========================
+
+
+Private Sub cmdSave_Click()
+    On Error GoTo EH
+
+    ' Minimal required fields for a header
+    If IsNull(Me.cboOrderType) Then
+        MsgBox "Order Type is required.", vbExclamation
+        Exit Sub
+    End If
+    If IsNull(Me.txtBaseToken) Then
+        MsgBox "Base Token is required.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Ensure Active flag present
+    If Me.NewRecord And IsNull(Me.ActiveFlag) Then Me.ActiveFlag = True
+
+    ' 1) Programmatic save to get SOID
+    mAllowProgrammaticSave = True
+    If Me.Dirty Then Me.Dirty = False
+    mAllowProgrammaticSave = False
+
+    If Me.Dirty Then Exit Sub ' validation failure blocked save
+        
+    ' Ensure SystemLetter is present for numbering
+    If Len(Nz(Me.cboSystemLetter, "")) = 0 Then
+        If StrComp(Nz(Me.cboOrderType, ""), "SALES", vbTextCompare) = 0 Then
+            Me.cboSystemLetter = "P"   ' default only for SALES; OK to remove if you want strictly required
+        Else
+            ' PROJECT: leave blank until user sets it; numbering will wait
+        End If
+    End If
+
+
+    ' 2) Attempt to assign OrderNumber if ready (both SALES & PROJECT)
+    If Not IsNull(Me.SOID) Then
+        AssignOrderNumberIfReady CLng(Me.SOID)
+        ' If the assigner wrote an OrderNumber, make sure it's committed
+        If Not IsNull(Me.OrderNumber) And Len(Me.OrderNumber & "") > 0 Then
+            mAllowProgrammaticSave = True
+            If Me.Dirty Then Me.Dirty = False
+            mAllowProgrammaticSave = False
+        End If
+    End If
+   
+    ' 3) Refresh list (if open), then close
+    If CurrentProject.AllForms("frmOrderList").IsLoaded Then
+        forms("frmOrderList").Requery
+    End If
+    DoCmd.Close acForm, Me.name
+    Exit Sub
+
+EH:
+    mAllowProgrammaticSave = False
+    MsgBox "Save failed: " & Err.Description, vbExclamation
+End Sub
+
+
+
+Private Sub cmdCancelOrder_Click()
+    On Error GoTo EH
+
+    If Me.NewRecord Then
+        MsgBox "This order hasn't been saved yet.", vbInformation
+        Exit Sub
+    End If
+    If Nz(Me.ActiveFlag, True) = False Then
+        MsgBox "This order is already canceled.", vbInformation
+        Exit Sub
+    End If
+
+    Dim ans As VbMsgBoxResult
+    ans = MsgBox("Cancel this order? It will still appear in the list as canceled.", _
+                 vbQuestion + vbYesNo + vbDefaultButton2, "Confirm Cancel")
+    If ans <> vbYes Then Exit Sub
+
+    Me.ActiveFlag = False
+    ' Optional audit:
+    ' Me.DateCanceled = Now()
+    ' Me.CanceledBy = Environ$("Username")
+
+    mAllowProgrammaticSave = True
+    If Me.Dirty Then Me.Dirty = False
+    mAllowProgrammaticSave = False
+
+    MsgBox "Order marked as canceled.", vbInformation
+    Exit Sub
+
+EH:
+    MsgBox "Cancel failed: " & Err.Description, vbExclamation
+End Sub
+
+'==========================
+' Customer pairing
+'==========================
+Private Sub cboCustomerCode_AfterUpdate()
+    On Error Resume Next
+    ' RowSource assumed: SELECT CustomerCode, CustomerName FROM Customers WHERE IsActive=True ORDER BY CustomerCode;
+    ' Column(0)=CustomerCode (bound), Column(1)=CustomerName
+    Me.txtCustomerName = Nz(Me.cboCustomerCode.Column(1), "")
+End Sub
+
+
+
+
+--------------------------------------------------------------------------------
+NAME:  Form_frmOrderList
+TYPE:  Document(Form/Report)
+LINES: 491
+FILE:  Form_frmOrderList.cls
+--------------------------------------------------------------------------------
+
+'=== Form: frmOrderList ===
+Option Compare Database
+Option Explicit
+
+'===========================================
+' Paging variables
+'===========================================
+Private Const PAGE_SIZE As Long = 25
+Private mlngStartRow As Long
+Private mlngEndRow As Long
+' Keep track of a one-shot batch filter to avoid paging/RowNum issues
+Private mBatchFilter As String
+Private mShowCanceled As Boolean  ' False = active orders, True = canceled/deleted orders
+
+
+Private Sub cmdCreateBackorder_Click()
+    On Error GoTo EH
+
+    ' Validate that an order is selected
+    If IsNull(Me!SOID) Or Me!SOID = 0 Then
+        MsgBox "Please select an order first.", vbExclamation
+        Exit Sub
+    End If
+
+    Dim SourceSOID As Long
+    SourceSOID = Me!SOID
+
+    ' Confirm with user
+    Dim orderNum As String
+    orderNum = Nz(Me!OrderNumber, "(no number)")
+    If MsgBox("Create a backorder from:" & vbCrLf & vbCrLf & _
+              orderNum & vbCrLf & vbCrLf & _
+              "Continue?", vbYesNo + vbQuestion, "Create Backorder") = vbNo Then
+        Exit Sub
+    End If
+
+    ' Clear any prior status
+    TempClear "BatchResult", "BatchErr", "BatchID", "CreatedCount"
+
+    Trace "Backorder: creating from SOID " & SourceSOID
+
+    ' Create the backorder
+    Dim newSOID As Long
+    Dim newBatchID As String
+    newBatchID = NewGuidString()
+
+    newSOID = CreateBackorder(SourceSOID, newBatchID)
+
+    If newSOID > 0 Then
+        ' Success - set TempVars like batch commit does
+        TempVars("BatchResult") = "Committed"
+        TempVars("BatchID") = newBatchID
+        TempVars("CreatedCount") = "1"
+        ' --- AUDIT: Backorder created ---
+    Dim srcOrderNum As String, newOrderNum As String
+    srcOrderNum = Nz(Me!OrderNumber, "")
+    newOrderNum = Nz(DLookup("OrderNumber", "SalesOrders", "SOID=" & newSOID), "")
+    
+    LogOrderAction newSOID, newOrderNum, "BACKORDER_CREATE", "", "", _
+        "SourceSOID=" & SourceSOID & _
+        "; SourceOrderNumber=" & srcOrderNum & _
+        "; BatchID=" & newBatchID
+
+        Trace "Backorder: success, new SOID=" & newSOID
+        
+        ' Apply filter to show only the new backorder
+        Me.FilterOn = False
+        Me.Filter = vbNullString
+        mBatchFilter = "BatchID='" & Replace(newBatchID, "'", "''") & "'"
+
+        RefreshPage
+
+        On Error Resume Next
+        Me.Recordset.MoveFirst
+        On Error GoTo 0
+
+        ' Show success message with new order number
+        'Dim newOrderNum As String
+        newOrderNum = Nz(DLookup("OrderNumber", "SalesOrders", "SOID=" & newSOID), "")
+        MsgBox "Backorder created successfully:" & vbCrLf & vbCrLf & _
+               newOrderNum, vbInformation, "Backorder Created"
+    Else
+        TempVars("BatchResult") = "Error"
+        TempVars("BatchErr") = "CreateBackorder returned 0"
+        MsgBox "Failed to create backorder.", vbCritical
+    End If
+
+    ClearHandledError "frmOrderList.Backorder"
+    Exit Sub
+
+EH:
+    TempVars("BatchResult") = "Error"
+    TempVars("BatchErr") = Err.Number & ": " & Err.Description
+    MsgBox "Backorder failed: " & Err.Description, vbCritical
+    ' --- AUDIT: Batch commit failed ---
+    LogOrderAction 0, "", "BATCH_COMMIT_FAILED", "", "", "Err " & Err.Number & ": " & Err.Description
+
+End Sub
+
+Private Sub cmdReserveNumbers_Click()
+    On Error GoTo EH
+
+    Trace "Launcher: opening order type chooser"
+
+    ' Clear any prior status from older runs
+    TempClear "BatchResult", "BatchErr", "BatchID", "CreatedCount"
+    TempClear "OrderTypeSelection", "SelectedBaseToken", "SelectedSystemLetter"
+
+    ' Open the order type chooser modally
+    DoCmd.OpenForm "dlgNewOrderType", WindowMode:=acDialog
+
+    Trace "Launcher: after order type dialog returned"
+
+    ' Check result via TempVars (set by dlgBatchGenerateOrders when commit succeeds)
+    Dim res As String
+    res = Nz(TV("BatchResult", ""), "")
+
+    Select Case res
+
+    Case "Committed"
+        Trace "Launcher: success branch"
+
+        Me.FilterOn = False
+        Me.Filter = vbNullString
+
+        Dim sBatch As String
+        sBatch = Nz(TV("BatchID", ""), "")
+
+        If Len(sBatch) > 0 Then
+            mBatchFilter = "BatchID='" & Replace(sBatch, "'", "''") & "'"
+            Me.Caption = "Order List (Filtered to Batch)"
+        Else
+            mBatchFilter = vbNullString
+            Me.Caption = "Order List"
+        End If
+
+        RefreshPage
+
+        On Error Resume Next
+        Me.Recordset.MoveFirst
+        On Error GoTo 0
+
+        ' Form_Current fires automatically on MoveFirst, updating selection display
+
+    Case "Error"
+        Trace "Launcher: error branch"
+        MsgBox "Commit failed: " & Nz(TV("BatchErr", "(unknown)"), "(unknown)"), vbCritical
+
+    Case "Canceled", ""
+        Trace "Launcher: canceled/no-status branch"
+        Me.Requery
+
+    End Select
+
+    ClearHandledError "frmOrderList.AfterDialog"
+    Exit Sub
+
+EH:
+    MsgBox "Open wizard failed: " & Err.Number & " - " & Err.Description, vbExclamation
+End Sub
+
+Private Sub cmdShowCanceled_Click()
+    SetOrderListMode True
+End Sub
+
+Private Sub Form_Open(Cancel As Integer)
+    mlngStartRow = 1
+    mlngEndRow = PAGE_SIZE
+    mBatchFilter = ""
+    mShowCanceled = False
+End Sub
+
+Private Sub Form_Load()
+    RefreshPage
+    'DoCmd.ShowToolbar "Ribbon", acToolbarNo
+
+    ' Initialize selection display
+    Form_Current
+End Sub
+
+Private Sub cmdNewOrder_Click()
+    ' Open chooser (Sales vs Project)
+    DoCmd.OpenForm "dlgNewOrderType", , , , acFormAdd
+End Sub
+
+Private Sub cmdNextPage_Click()
+    Me.cmdNextPage.ForeColor = RGB(255, 255, 255)
+    mlngStartRow = mlngEndRow + 1
+    mlngEndRow = mlngEndRow + PAGE_SIZE
+    RefreshPage
+End Sub
+
+Private Sub cmdPrevPage_Click()
+    Me.cmdPrevPage.ForeColor = RGB(255, 255, 255)
+    mlngStartRow = mlngStartRow - PAGE_SIZE
+    If mlngStartRow < 1 Then mlngStartRow = 1
+    mlngEndRow = mlngStartRow + PAGE_SIZE - 1
+    RefreshPage
+End Sub
+
+
+Private Sub RefreshPage()
+    Dim sql As String
+    Dim sWhere As String
+    Dim sCrit As String
+
+    If mShowCanceled Then
+        sWhere = "Q.ActiveFlag = False"
+        sCrit = " AND ActiveFlag=False"
+        Me.Caption = "Order List (Canceled)"
+    Else
+        sWhere = "Q.ActiveFlag = True"
+        sCrit = " AND ActiveFlag=True"
+        Me.Caption = "Order List (Active)"
+    End If
+
+    If Len(Nz(mBatchFilter, "")) > 0 Then
+        ' Batch view: no paging
+        sql = ""
+        sql = sql & "SELECT Q.* "
+        sql = sql & "FROM qryOrderList_BaseAll AS Q "
+        sql = sql & "WHERE " & sWhere & " AND " & mBatchFilter & " "
+        sql = sql & "ORDER BY Q.SOID DESC;"
+        Me.RecordSource = sql
+        Me.Requery
+        Exit Sub
+    End If
+
+    ' Paged view
+    sql = ""
+    sql = sql & "SELECT * FROM ("
+    sql = sql & "  SELECT "
+    sql = sql & "    Q.*, "
+    sql = sql & "    DCount('*','SalesOrders',"
+    sql = sql & "      'SOID >= ' & Q.SOID & '" & sCrit & "'"
+    sql = sql & "    ) AS RowNum "
+    sql = sql & "  FROM qryOrderList_BaseAll AS Q "
+    sql = sql & "  WHERE " & sWhere & " "
+    sql = sql & ") AS X "
+    sql = sql & "WHERE X.RowNum BETWEEN " & mlngStartRow & " AND " & mlngEndRow & " "
+    sql = sql & "ORDER BY X.SOID DESC;"
+
+    Me.RecordSource = sql
+    Me.Requery
+
+    Me.Caption = Me.Caption & " | Rows " & mlngStartRow & " to " & mlngEndRow
+End Sub
+
+
+
+' Return True if the current recordset exposes a field by name (case-insensitive)
+Private Function HasField(ByVal rs As DAO.Recordset, ByVal fldName As String) As Boolean
+    Dim i As Long
+    On Error GoTo EH
+    If (rs Is Nothing) Then Exit Function
+    For i = 0 To rs.fields.Count - 1
+        If StrComp(rs.fields(i).name, fldName, vbTextCompare) = 0 Then
+            HasField = True
+            Exit Function
+        End If
+    Next
+    Exit Function
+EH:
+    ' Swallow—treat as not found
+End Function
+
+'--------------------------------------------
+' Form_Current - Updates selection display when navigating records
+'--------------------------------------------
+Private Sub Form_Current()
+    On Error Resume Next
+
+    If Me.NewRecord Then
+        Me.txtCurrentSelection = "No order selected"
+    ElseIf IsNull(Me!SOID) Or Me!SOID = 0 Then
+        Me.txtCurrentSelection = "No order selected"
+    ElseIf IsNull(Me!OrderNumber) Or Len(Nz(Me!OrderNumber, "")) = 0 Then
+        Me.txtCurrentSelection = "Selected: SOID " & Me!SOID & " (no order number)"
+    Else
+        Me.txtCurrentSelection = "Selected: " & Me!OrderNumber & _
+            IIf(Len(Nz(Me!CustomerName, "")) > 0, " - " & Me!CustomerName, "")
+    End If
+End Sub
+
+
+Private Sub cmdFormReset_Click()
+    On Error GoTo EH
+
+    ' Clear form-level filter
+    Me.Filter = ""
+    Me.FilterOn = False
+
+    ' Return to Active list + resets paging + refresh
+    SetOrderListMode False
+
+    ' Update caption if you want
+    Me.Caption = "Order List (Active)"
+
+    Exit Sub
+EH:
+    MsgBox "Reset failed: " & Err.Description, vbExclamation
+End Sub
+
+
+Private Sub cmdStampBilled_Click()
+    On Error GoTo EH
+
+    ' Must be on an existing record
+    If Me.NewRecord Then
+        MsgBox "Please select or save a record before stamping.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Clear any old values
+    On Error Resume Next
+    TempVars.Remove "StampBilledDate"
+    TempVars.Remove "StampBilledResult"
+    On Error GoTo 0
+
+    ' Open the dialog modally
+    DoCmd.OpenForm "dlgStampBilledDate", WindowMode:=acDialog
+
+    ' Check result
+    If Nz(TempVars("StampBilledResult"), "Cancel") <> "OK" Then
+        Exit Sub
+    End If
+
+    ' Write the chosen date to your bound field
+    Me!DateBilled = TempVars("StampBilledDate")
+
+    ' Persist immediately (optional but recommended)
+    If Me.Dirty Then Me.Dirty = False
+
+    ' Refresh your formatted display textbox (if it is an expression based on DateBilled)
+    Me!txtStampDate.Requery
+
+    Exit Sub
+
+EH:
+    MsgBox "Stamp Billed failed: " & Err.Description, vbExclamation
+End Sub
+
+Private Sub cmdCancelOrder_Click()
+    On Error GoTo EH
+
+    Dim db As DAO.Database
+    Dim ws As DAO.Workspace
+    Dim transStarted As Boolean
+
+    Dim lngSOID As Long
+    Dim sBy As String
+    Dim sReason As String
+    Dim dCanceled As Date
+
+    If Nz(Me!SOID, 0) = 0 Then
+        MsgBox "Please select an order to cancel.", vbExclamation
+        Exit Sub
+    End If
+    lngSOID = CLng(Me!SOID)
+
+    If MsgBox("Cancel this order?" & vbCrLf & vbCrLf & Nz(Me!OrderNumber, ""), _
+              vbYesNo + vbQuestion, "Cancel Order") = vbNo Then
+        Exit Sub
+    End If
+
+    TempVarRemoveSafe "CancelResult"
+    TempVarRemoveSafe "CanceledBy"
+    TempVarRemoveSafe "CancelReason"
+    TempVarRemoveSafe "DateCanceled"
+
+    DoCmd.OpenForm "dlgCancelOrder", WindowMode:=acDialog
+
+    If CStr(TempVarGet("CancelResult", "Cancel")) <> "OK" Then
+        Exit Sub
+    End If
+
+    sBy = Trim$(CStr(TempVarGet("CanceledBy", "")))
+    sReason = Trim$(CStr(TempVarGet("CancelReason", "")))
+    dCanceled = CDate(TempVarGet("DateCanceled", Date))
+
+    If Len(sBy) = 0 Or Len(sReason) = 0 Then
+        MsgBox "Cancel dialog returned incomplete data.", vbExclamation
+        Exit Sub
+    End If
+
+    Set db = CurrentDb
+    Set ws = DBEngine.Workspaces(0)
+
+    ws.BeginTrans
+    transStarted = True
+
+    db.Execute _
+        "UPDATE SalesOrders " & _
+        "SET ActiveFlag = False, " & _
+        "    CanceledBy = '" & Replace(sBy, "'", "''") & "', " & _
+        "    CancelReason = '" & Replace(sReason, "'", "''") & "', " & _
+        "    DateCanceled = #" & Format$(dCanceled, "yyyy-mm-dd") & "# " & _
+        "WHERE SOID = " & lngSOID & ";", dbFailOnError
+
+    db.Execute _
+        "UPDATE SalesOrderEntry " & _
+        "SET IsDeleted = True " & _
+        "WHERE SOID = " & lngSOID & ";", dbFailOnError
+
+    ws.CommitTrans
+    transStarted = False
+
+    ' ---- AUDIT (success) ----
+    LogOrderAction lngSOID, Nz(Me!OrderNumber, ""), "CANCEL", "Active", "Canceled", sReason
+    ' Or, if you prefer the generic logger:
+    'LogAudit "SalesOrders", lngSOID, "CANCEL", "ActiveFlag", "True", "False", _
+    '         "By=" & sBy & "; Reason=" & sReason
+
+    If Me.Dirty Then Me.Dirty = False
+    RefreshPage
+
+    Trace "CancelOrder: SUCCESS SOID=" & lngSOID & "; By=" & sBy
+    MsgBox "Order canceled.", vbInformation
+    Exit Sub
+
+EH:
+    Trace "CancelOrder: FAILED SOID=" & Nz(Me!SOID, 0) & _
+          " Err=" & Err.Number & " " & Err.Description
+
+    ' ---- AUDIT (failure) ----
+    LogOrderAction Nz(Me!SOID, 0), Nz(Me!OrderNumber, ""), "CANCEL_FAILED", "", "", _
+                   "Err " & Err.Number & ": " & Err.Description
+
+    MsgBox "Error canceling order: " & Err.Number & " - " & Err.Description, vbCritical
+
+    On Error Resume Next
+    If transStarted Then
+        ws.Rollback
+        transStarted = False
+    End If
+End Sub
+
+Private Function TempVarGet(ByVal varName As String, Optional ByVal defaultValue As Variant) As Variant
+    On Error GoTo NotFound
+    TempVarGet = TempVars(varName).Value
+    Exit Function
+NotFound:
+    TempVarGet = defaultValue
+End Function
+
+Private Sub TempVarRemoveSafe(ByVal varName As String)
+    On Error Resume Next
+    TempVars.Remove varName
+    On Error GoTo 0
+End Sub
+
+Private Sub SetOrderListMode(ByVal ShowCanceled As Boolean)
+    ' Clear any batch filter so user sees the true canceled/active lists
+    mBatchFilter = vbNullString
+
+    ' Set mode
+    mShowCanceled = ShowCanceled
+
+    ' Reset paging
+    mlngStartRow = 1
+    mlngEndRow = PAGE_SIZE
+
+    ' Optional: show/hide metadata controls (see Step 6)
+    ApplyCancelMetaVisibility
+
+    ' Refresh
+    RefreshPage
+
+    On Error Resume Next
+    Me.Recordset.MoveFirst
+    On Error GoTo 0
+End Sub
+
+Private Sub ApplyCancelMetaVisibility()
+    Dim showMeta As Boolean
+    showMeta = mShowCanceled
+
+    On Error Resume Next
+    Me.txtCanceledBy.Visible = showMeta
+    Me.txtDateCanceled.Visible = showMeta
+    Me.txtCancelReason.Visible = showMeta
+
+    Me.lblCanceledBy.Visible = showMeta
+    Me.lblDateCanceled.Visible = showMeta
+    Me.lblCancelReason.Visible = showMeta
+    On Error GoTo 0
+End Sub
+
+
+
+
+
+--------------------------------------------------------------------------------
+NAME:  basOrderNumbering
+TYPE:  StdModule
+LINES: 66
+FILE:  basOrderNumbering.bas
+--------------------------------------------------------------------------------
+
+Option Compare Database
+Option Explicit
+
+'==== Public API ====
+Public Function NextSalesBaseToken() As Long
+    ' Returns the next BaseToken for a SALES order for the current year
+    On Error GoTo EH
+
+    Dim yr As Integer
+    yr = Year(Date)  ' use today's date for the annual seed
+
+    Dim seed As Long, upper As Long
+    seed = SalesBaseSeedForYear(yr)
+    upper = seed + 999
+
+    Dim db As DAO.Database
+    Dim rs As DAO.Recordset
+    Dim sql As String
+    Dim maxVal As Long
+
+    Set db = CurrentDb
+
+    ' Use VAL(BaseToken) so it works whether BaseToken is Text or Number
+    sql = "SELECT MAX(VAL(BaseToken)) AS MaxBT " & _
+          "FROM SalesOrders " & _
+          "WHERE OrderType='SALES' " & _
+          "AND VAL(BaseToken) BETWEEN " & seed & " AND " & upper & ";"
+
+    Set rs = db.OpenRecordset(sql, dbOpenSnapshot)
+    If Not (rs.BOF And rs.EOF) Then
+        maxVal = Nz(rs!MaxBT, 0)
+    End If
+    rs.Close
+    Set rs = Nothing
+    Set db = Nothing
+
+    If maxVal = 0 Then
+        NextSalesBaseToken = seed          ' no orders yet this year
+    ElseIf maxVal < upper Then
+        NextSalesBaseToken = maxVal + 1    ' next within this year's block
+    Else
+        Err.Raise vbObjectError + 513, "NextSalesBaseToken", _
+                  "Yearly SALES BaseToken block exhausted (" & yr & ")."
+    End If
+
+    Exit Function
+
+EH:
+    MsgBox "NextSalesBaseToken error: " & Err.Description, vbExclamation
+    NextSalesBaseToken = 0
+End Function
+
+Public Function DefaultSalesSystemLetter() As String
+    ' Default for SALES orders, user may override on form if needed
+    DefaultSalesSystemLetter = "P"
+End Function
+
+'==== Internal helpers ====
+Private Function SalesBaseSeedForYear(ByVal yr As Integer) As Long
+    ' Your rule: 2026 -> 576000, 2027 -> 577000, i.e. +1000 per year
+    ' => seed = 576000 + (yr - 2026) * 1000
+    SalesBaseSeedForYear = 576000 + CLng(yr - 2026) * 1000
+End Function
+
+
+
+
+--------------------------------------------------------------------------------
+NAME:  basSchemaDump
+TYPE:  StdModule
+LINES: 484
+FILE:  basSchemaDump.bas
+--------------------------------------------------------------------------------
+
+Option Compare Database
+Option Explicit
+
+'===================================================================
+'   basSchemaDump — Dumps COMPLETE table schema to a text file
+'
+'   Output includes:
+'     - Table name
+'     - Fields: Name, Type, Size, Required, AllowZeroLength, Default
+'     - Indexes: Name, Unique, Primary, IgnoreNulls, Fields
+'
+'   Usage:
+'       Call DumpAllTableSchemas("C:\Temp\SchemaDump.txt")
+'
+'===================================================================
+
+Public Sub DumpAllTableSchemas(ByVal outputPath As String)
+
+    Dim db As DAO.Database
+    Dim tdf As DAO.TableDef
+    Dim f As Integer
+    
+    Set db = CurrentDb()
+    f = FreeFile
+    
+    Open outputPath For Output As #f
+    Print #f, "=== DATABASE SCHEMA DUMP ==="
+    Print #f, "Database: " & db.name
+    Print #f, "Dumped On: " & Now()
+    Print #f, String(80, "=")
+    Print #f, ""
+    
+    For Each tdf In db.TableDefs
+        ' Skip system tables
+        If Left$(tdf.name, 4) <> "MSys" Then
+            Call DumpOneTableSchema(tdf, f)
+        End If
+    Next tdf
+
+    Close #f
+    MsgBox "Schema dump complete:" & vbCrLf & outputPath, vbInformation
+
+End Sub
+
+
+'===================================================================
+' Dump details for one table into an open file handle
+'===================================================================
+Private Sub DumpOneTableSchema(tdf As DAO.TableDef, ByVal f As Integer)
+
+    Dim fld As DAO.Field
+    Dim idx As DAO.Index
+    Dim idxFld As DAO.Field
+
+    Print #f, String(80, "-")
+    Print #f, "TABLE: " & tdf.name
+    Print #f, String(80, "-")
+    Print #f, ""
+
+    '---------------------------------------------------------------
+    ' FIELDS
+    '---------------------------------------------------------------
+    Print #f, "  **FIELDS**"
+    Print #f, "  Name | Type | Size | Required | AllowZeroLen | DefaultValue"
+    Print #f, "  -------------------------------------------------------------------"
+
+    For Each fld In tdf.fields
+        Print #f, _
+            "  " & fld.name & " | " & _
+            DAOTypeString(fld.Type) & " | " & _
+            fld.Size & " | " & _
+            BoolToYesNo(FieldProperty(fld, "Required")) & " | " & _
+            BoolToYesNo(FieldProperty(fld, "AllowZeroLength")) & " | " & _
+            Nz(FieldProperty(fld, "DefaultValue"), "")
+    Next fld
+    
+    Print #f, ""
+
+    '---------------------------------------------------------------
+    ' INDEXES
+    '---------------------------------------------------------------
+    Print #f, "  **INDEXES**"
+    Print #f, "  Name | Primary | Unique | IgnoreNulls | Fields"
+    Print #f, "  -------------------------------------------------------------------"
+
+    For Each idx In tdf.Indexes
+        Print #f, _
+            "  " & idx.name & " | " & _
+            BoolToYesNo(idx.Primary) & " | " & _
+            BoolToYesNo(idx.Unique) & " | " & _
+            BoolToYesNo(idx.IgnoreNulls) & " | " & _
+            IndexFieldList(idx)
+    Next idx
+    
+    Print #f, vbCrLf
+
+End Sub
+
+
+'===================================================================
+' Convert DAO data type enum to readable text
+'===================================================================
+Private Function DAOTypeString(ByVal typeCode As Integer) As String
+    Select Case typeCode
+        Case dbBoolean: DAOTypeString = "Yes/No"
+        Case dbByte: DAOTypeString = "Byte"
+        Case dbInteger: DAOTypeString = "Integer"
+        Case dbLong: DAOTypeString = "Long"
+        Case dbCurrency: DAOTypeString = "Currency"
+        Case dbSingle: DAOTypeString = "Single"
+        Case dbDouble: DAOTypeString = "Double"
+        Case dbDate: DAOTypeString = "Date/Time"
+        Case dbText: DAOTypeString = "Short Text"
+        Case dbLongBinary: DAOTypeString = "Long Binary"
+        Case dbMemo: DAOTypeString = "Long Text"
+        Case dbGUID: DAOTypeString = "GUID"
+        Case Else: DAOTypeString = "Other(" & typeCode & ")"
+    End Select
+End Function
+
+
+'===================================================================
+' Extract custom field properties safely
+'===================================================================
+Private Function FieldProperty(fld As DAO.Field, propName As String) As Variant
+    On Error GoTo NoProp
+    FieldProperty = fld.Properties(propName).Value
+    Exit Function
+NoProp:
+    FieldProperty = Null
+End Function
+
+
+'===================================================================
+' Convert Boolean ? Yes/No
+'===================================================================
+Private Function BoolToYesNo(ByVal v As Variant) As String
+    If IsNull(v) Then
+        BoolToYesNo = ""
+    ElseIf v = True Then
+        BoolToYesNo = "Yes"
+    Else
+        BoolToYesNo = "No"
+    End If
+End Function
+
+
+'===================================================================
+' Return index fields as comma-separated list
+'===================================================================
+Private Function IndexFieldList(idx As DAO.Index) As String
+    Dim s As String
+    Dim fld As DAO.Field
+    
+    For Each fld In idx.fields
+        s = s & fld.name & ", "
+    Next fld
+    
+    If Len(s) > 0 Then s = Left$(s, Len(s) - 2)
+    IndexFieldList = s
+End Function
+
+
+Public Sub Patch_SalesOrders_OrderNumber_Field()
+    On Error GoTo EH
+
+    Dim db As DAO.Database
+    Dim tdf As DAO.TableDef
+    Dim fld As DAO.Field
+    Dim idx As DAO.Index
+    Dim i As Integer
+    
+    Set db = CurrentDb
+    Set tdf = db.TableDefs("SalesOrders")
+    
+    ' 1) Normalize existing data: turn "" into Null
+    '    (Will error out if OrderNumber doesn't exist; trap below)
+    db.Execute "UPDATE SalesOrders SET OrderNumber = Null WHERE Nz(OrderNumber,'')='';", dbFailOnError
+
+    ' 2) Ensure field options (AllowZeroLength=False, DefaultValue cleared)
+    On Error Resume Next
+    Set fld = tdf.fields("OrderNumber")
+    On Error GoTo EH
+    If fld Is Nothing Then Err.Raise vbObjectError + 1001, , "Field 'OrderNumber' not found."
+
+    ' AllowZeroLength is a property on Text fields in Access
+    On Error Resume Next
+    fld.Properties("AllowZeroLength").Value = False
+    If Err.Number <> 0 Then
+        ' Property may not exist on non-text or depending on version; ignore
+        Err.Clear
+    End If
+    On Error GoTo EH
+    
+    ' Clear default value if any (prevents defaulting to "")
+    On Error Resume Next
+    fld.defaultValue = Null
+    If Err.Number <> 0 Then Err.Clear
+    On Error GoTo EH
+
+    ' 3) Recreate ux_SO_OrderNumber as Unique with IgnoreNulls=True
+    On Error Resume Next
+    tdf.Indexes.Delete "ux_SO_OrderNumber"
+    On Error GoTo EH
+
+    Set idx = tdf.CreateIndex("ux_SO_OrderNumber")
+    idx.Unique = True
+    idx.IgnoreNulls = True
+    idx.fields.Append idx.CreateField("OrderNumber")
+    tdf.Indexes.Append idx
+
+    MsgBox "Patched: OrderNumber normalized to Null, AllowZeroLength=False, default cleared, unique index (IgnoreNulls) set.", vbInformation
+    Exit Sub
+
+EH:
+    MsgBox "Patch failed: " & Err.Description, vbExclamation
+End Sub
+
+
+Public Sub Drop_SalesOnly_Composite_Index()
+    On Error GoTo EH
+    Dim db As DAO.Database
+    Dim tdf As DAO.TableDef
+
+    Set db = CurrentDb
+    Set tdf = db.TableDefs("SalesOrders")
+
+    On Error Resume Next
+    tdf.Indexes.Delete "ux_SO_Normal_Base_Bo"
+    On Error GoTo EH
+
+    MsgBox "Dropped index ux_SO_Normal_Base_Bo (PROJECT flow unblocked).", vbInformation
+    Exit Sub
+
+EH:
+    MsgBox "Index drop failed: " & Err.Description, vbExclamation
+End Sub
+
+
+
+Public Sub Dump_SalesOrders_Indexes_Detailed()
+    Dim db As DAO.Database
+    Dim tdf As DAO.TableDef
+    Dim idx As DAO.Index
+    Dim i As Integer, line As String
+
+    Set db = CurrentDb
+    Set tdf = db.TableDefs("SalesOrders")
+
+    Debug.Print "----- INDEXES: SalesOrders -----"
+    For Each idx In tdf.Indexes
+        line = "Name=" & idx.name & _
+               "; Primary=" & idx.Primary & _
+               "; Unique=" & idx.Unique & _
+               "; IgnoreNulls=" & idx.IgnoreNulls & _
+               "; Fields=["
+        For i = 0 To idx.fields.Count - 1
+            line = line & IIf(i > 0, ",", "") & idx.fields(i).name
+        Next
+        line = line & "]"
+        Debug.Print line
+    Next idx
+    Debug.Print "--------------------------------"
+End Sub
+
+
+Public Sub Allow_Duplicate_PONumbers()
+    On Error GoTo EH
+
+    Dim db As DAO.Database
+    Dim tdf As DAO.TableDef
+    Dim idx As DAO.Index
+    Dim i As Long
+
+    Set db = CurrentDb
+    Set tdf = db.TableDefs("SalesOrders")
+
+    ' --- Remove likely unique constraints involving PONumber ---
+    On Error Resume Next
+    ' Single-field unique on PONumber (often created by field property "Indexed: No Duplicates")
+    tdf.Indexes.Delete "PONumber"
+    tdf.Indexes.Delete "ux_SO_PONumber"
+    tdf.Indexes.Delete "ux_PONumber"
+    ' Common composite names people use
+    tdf.Indexes.Delete "ux_SO_Cust_PO_Date"
+    tdf.Indexes.Delete "ux_SO_PO_Cust_Date"
+    tdf.Indexes.Delete "ux_SO_CustomerCode_PONumber_DateReceived"
+    On Error GoTo EH
+
+    ' In case an unknown-named index exists that is Unique and includes PONumber,
+    ' scan and drop it programmatically.
+    For i = tdf.Indexes.Count - 1 To 0 Step -1
+        Set idx = tdf.Indexes(i)
+        If idx.Unique Then
+            Dim hasPO As Boolean: hasPO = False
+            Dim f As DAO.Field, j As Long
+            For j = 0 To idx.fields.Count - 1
+                If StrComp(idx.fields(j).name, "PONumber", vbTextCompare) = 0 Then
+                    hasPO = True
+                    Exit For
+                End If
+            Next
+            If hasPO Then
+                tdf.Indexes.Delete idx.name
+            End If
+        End If
+    Next i
+
+    ' --- (Optional) Recreate a NON-UNIQUE index for PONumber for performance ---
+    ' If you don't want this index at all, comment this block out.
+    Set idx = tdf.CreateIndex("ix_SO_PONumber")
+    idx.Unique = False
+    ' IgnoreNulls matters primarily on unique indexes, but harmless to leave here
+    idx.IgnoreNulls = True
+    idx.fields.Append idx.CreateField("PONumber")
+    tdf.Indexes.Append idx
+
+    MsgBox "PONumber uniqueness removed. Non-unique index ix_SO_PONumber created.", vbInformation
+    Exit Sub
+
+EH:
+    MsgBox "Allow_Duplicate_PONumbers failed: " & Err.Description, vbExclamation
+End Sub
+
+
+Public Sub Drop_Blocking_Composite_For_Project()
+    On Error GoTo EH
+    Dim db As DAO.Database
+    Dim tdf As DAO.TableDef
+    Set db = CurrentDb
+    Set tdf = db.TableDefs("SalesOrders")
+
+    On Error Resume Next
+    tdf.Indexes.Delete "ux_SO_Normal_Base_Bo"
+    On Error GoTo EH
+
+    MsgBox "Dropped ux_SO_Normal_Base_Bo. PROJECT flow unblocked.", vbInformation
+    Exit Sub
+EH:
+    MsgBox "Drop failed: " & Err.Description, vbExclamation
+End Sub
+
+
+
+Public Sub Create_OrderSeq_Table_IfMissing()
+    On Error GoTo EH
+
+    Dim db As DAO.Database
+    Set db = CurrentDb
+
+    Dim t As DAO.TableDef, f As DAO.Field, ix As DAO.Index
+
+    ' Drop if accidentally half-created
+    On Error Resume Next
+    db.TableDefs.Delete "OrderSeq"
+    On Error GoTo EH
+
+    Set t = db.CreateTableDef("OrderSeq")
+
+    ' Scope: "SALES" or "PROJECT"
+    Set f = t.CreateField("Scope", dbText, 10): f.AllowZeroLength = False: t.fields.Append f
+    ' BaseToken: e.g., 576005, TAGO25, etc.
+    Set f = t.CreateField("BaseToken", dbText, 32): f.AllowZeroLength = False: t.fields.Append f
+    ' QualifierCode: NULL for SALES; "CM","CE",... for PROJECT
+    Set f = t.CreateField("QualifierCode", dbText, 10): f.AllowZeroLength = True: t.fields.Append f
+    ' SystemLetter: "P","N","J",...
+    Set f = t.CreateField("SystemLetter", dbText, 1): f.AllowZeroLength = True: t.fields.Append f
+    ' NextSeq: next number to hand out (start at 1)
+    Set f = t.CreateField("NextSeq", dbLong): t.fields.Append f
+    ' Audit (optional)
+    Set f = t.CreateField("LastUpdated", dbDate): t.fields.Append f
+
+    db.TableDefs.Append t
+
+    ' Unique composite index on the domain
+    Set ix = t.CreateIndex("ux_OrderSeq_Domain")
+    ix.Unique = True
+    ix.fields.Append ix.CreateField("Scope")
+    ix.fields.Append ix.CreateField("BaseToken")
+    ix.fields.Append ix.CreateField("QualifierCode")
+    ix.fields.Append ix.CreateField("SystemLetter")
+    t.Indexes.Append ix
+
+    ' Convenience non-unique lookups
+    Set ix = t.CreateIndex("ix_OrderSeq_BaseToken")
+    ix.fields.Append ix.CreateField("BaseToken")
+    t.Indexes.Append ix
+
+    MsgBox "OrderSeq created.", vbInformation
+    Exit Sub
+
+EH:
+    MsgBox "Create_OrderSeq_Table_IfMissing failed: " & Err.Description, vbExclamation
+End Sub
+
+
+Public Sub Ensure_SalesOrders_BatchID()
+    On Error Resume Next
+    CurrentDb.Execute "ALTER TABLE SalesOrders ADD COLUMN BatchID TEXT(36);"
+    If Err.Number = 0 Then
+        MsgBox "SalesOrders.BatchID added (optional).", vbInformation
+    Else
+        ' ignore if already exists
+        Err.Clear
+    End If
+End Sub
+
+
+Public Sub Ensure_BatchWizard_TempTables_DAO()
+    On Error GoTo EH
+
+    Dim db As DAO.Database
+    Set db = CurrentDb
+
+    '--- Recreate tmpQualifierQty ---
+    SafeDropTable "tmpQualifierQty"
+
+    Dim t As DAO.TableDef, f As DAO.Field, ix As DAO.Index
+
+    Set t = db.CreateTableDef("tmpQualifierQty")
+    ' QualifierCode TEXT(10) NOT NULL
+    Set f = t.CreateField("QualifierCode", dbText, 10)
+    f.AllowZeroLength = False
+    t.fields.Append f
+    ' Description TEXT(100) (optional for UI)
+    Set f = t.CreateField("Description", dbText, 100)
+    f.AllowZeroLength = True
+    t.fields.Append f
+    ' Qty LONG (default 0) – DAO doesn’t set Default via Field property reliably;
+    ' we’ll initialize rows to 0 via our reset proc.
+    Set f = t.CreateField("Qty", dbLong)
+    t.fields.Append f
+
+    ' Index on QualifierCode (non-unique, we only use it for fast lookups)
+    db.TableDefs.Append t
+    Set ix = t.CreateIndex("ix_tmpQual")
+    ix.fields.Append ix.CreateField("QualifierCode")
+    t.Indexes.Append ix
+
+    '--- Recreate tmpBatchPreview ---
+    SafeDropTable "tmpBatchPreview"
+
+    Set t = db.CreateTableDef("tmpBatchPreview")
+    ' OrderNumber TEXT(50)
+    Set f = t.CreateField("OrderNumber", dbText, 50)
+    f.AllowZeroLength = True
+    t.fields.Append f
+    ' QualifierCode TEXT(10)
+    Set f = t.CreateField("QualifierCode", dbText, 10)
+    f.AllowZeroLength = True
+    t.fields.Append f
+    ' SeqNo LONG
+    Set f = t.CreateField("SeqNo", dbLong)
+    t.fields.Append f
+
+    db.TableDefs.Append t
+    Set ix = t.CreateIndex("ix_tmpPrev")
+    ix.fields.Append ix.CreateField("OrderNumber")
+    t.Indexes.Append ix
+
+    MsgBox "Temp tables created: tmpQualifierQty, tmpBatchPreview.", vbInformation
+    Exit Sub
+
+EH:
+    MsgBox "Ensure_BatchWizard_TempTables_DAO failed: " & Err.Description, vbExclamation
+End Sub
+
+Private Sub SafeDropTable(ByVal tableName As String)
+    On Error Resume Next
+    ' Close any open recordsets/objects implicitly referencing the table
+    DoCmd.Close acTable, tableName, acSaveNo
+    CurrentDb.TableDefs.Delete tableName
+    Err.Clear
+End Sub
+
+
+
+
+
+
+
+
+
+
+
+--------------------------------------------------------------------------------
+NAME:  basFormDump
+TYPE:  StdModule
+LINES: 153
+FILE:  basFormDump.bas
+--------------------------------------------------------------------------------
+
+Option Compare Database
+Option Explicit
+
+' =====================================================================
+'   basFormDump
+'   Dumps *all forms*, *all controls*, and their bindings/event procs
+'   to a text file so I (your assistant) can analyze your current state.
+'
+'   Usage:
+'       Call DumpAllForms("C:\Temp\FormDump.txt")
+'
+' =====================================================================
+
+Public Sub DumpAllForms(outputPath As String)
+    On Error GoTo ErrHandler
+    
+    Dim f As Integer
+    Dim frmName As String
+    Dim accObj As Access.AccessObject
+    
+    f = FreeFile
+    Open outputPath For Output As #f
+    
+    Print #f, "=== FORM DUMP ==="
+    Print #f, "Database: " & CurrentDb.name
+    Print #f, "Dumped On: " & Now()
+    Print #f, String(80, "=")
+    Print #f, ""
+    
+    ' Loop through all forms in the project
+    For Each accObj In CurrentProject.AllForms
+        frmName = accObj.name
+        Call DumpOneForm(frmName, f)
+    Next accObj
+    
+    Close #f
+    MsgBox "Form dump complete: " & outputPath, vbInformation
+    Exit Sub
+
+ErrHandler:
+    MsgBox "DumpAllForms failed: " & Err.Number & " - " & Err.Description, vbCritical
+End Sub
+
+
+' =====================================================================
+'   DumpOneForm
+' =====================================================================
+Private Sub DumpOneForm(frmName As String, f As Integer)
+    On Error GoTo ErrHandler
+    
+    Dim frm As Form
+    Dim ctl As Control
+    Dim prop As Property
+    Dim recSource As String
+    
+    DoCmd.OpenForm frmName, acDesign, , , , acHidden
+    Set frm = forms(frmName)
+    
+    Print #f, String(80, "-")
+    Print #f, "FORM: " & frmName
+    Print #f, String(80, "-")
+    
+    ' Record Source
+    recSource = Nz(frm.RecordSource, "")
+    Print #f, "  RecordSource: " & recSource
+    Print #f, ""
+    
+    ' Controls
+    Print #f, "  **CONTROLS**"
+    Print #f, "  Name | Type | ControlSource | RowSource | Event Procedures"
+    Print #f, "  -------------------------------------------------------------------------"
+    
+    For Each ctl In frm.Controls
+        Dim cName As String, cType As String, cSrc As String, rSrc As String
+        Dim events As String
+        
+        cName = ctl.name
+        cType = ControlTypeName(ctl.ControlType)
+        
+        On Error Resume Next
+        cSrc = Nz(ctl.ControlSource, "")
+        rSrc = Nz(ctl.RowSource, "")
+        On Error GoTo ErrHandler
+        
+        events = GetEventProcedures(ctl)
+        
+        Print #f, "  " & cName & " | " & cType & " | " & cSrc & " | " & _
+            Left$(Replace(rSrc, vbCrLf, " "), 60) & " | " & events
+    Next ctl
+    
+    Print #f, vbCrLf
+    
+    DoCmd.Close acForm, frmName, acSaveNo
+    Exit Sub
+
+ErrHandler:
+    Print #f, "  [ERROR reading form " & frmName & ": " & Err.Description & "]"
+    Resume Next
+End Sub
+
+
+' =====================================================================
+'  Get readable control type name
+' =====================================================================
+Private Function ControlTypeName(ct As Long) As String
+    Select Case ct
+        Case acTextBox: ControlTypeName = "TextBox"
+        Case acComboBox: ControlTypeName = "ComboBox"
+        Case acListBox: ControlTypeName = "ListBox"
+        Case acLabel: ControlTypeName = "Label"
+        Case acCommandButton: ControlTypeName = "CommandButton"
+        Case acSubform: ControlTypeName = "Subform"
+        Case acOptionGroup: ControlTypeName = "OptionGroup"
+        Case acCheckBox: ControlTypeName = "CheckBox"
+        Case acToggleButton: ControlTypeName = "ToggleButton"
+        Case acRectangle: ControlTypeName = "Rectangle"
+        Case acLine: ControlTypeName = "Line"
+        Case acTabCtl: ControlTypeName = "TabControl"
+        Case Else: ControlTypeName = "Other(" & ct & ")"
+    End Select
+End Function
+
+
+' =====================================================================
+'  Extract event procedures (On Click, On Load, On Current, etc.)
+' =====================================================================
+Private Function GetEventProcedures(ctl As Control) As String
+    Dim evtNames As Variant
+    Dim evt As Variant
+    Dim results As String
+    
+    evtNames = Array("OnClick", "OnDblClick", "OnEnter", "OnExit", _
+                     "OnGotFocus", "OnLostFocus", "OnChange", "OnCurrent", _
+                     "OnDirty", "OnUndo", "OnKeyDown", "OnKeyUp", "OnMouseDown", _
+                     "OnMouseUp", "OnMouseMove")
+    
+    For Each evt In evtNames
+        On Error Resume Next
+        Dim v As String: v = ctl.Properties(evt)
+        If Err.Number = 0 Then
+            If InStr(1, v, "[Event Procedure]") > 0 Then
+                results = results & evt & "; "
+            End If
+        End If
+        Err.Clear
+        On Error GoTo 0
+    Next evt
+    
+    GetEventProcedures = results
+End Function
+
+
+
+
+--------------------------------------------------------------------------------
+NAME:  Form_dlgNewOrderType
+TYPE:  Document(Form/Report)
+LINES: 111
+FILE:  Form_dlgNewOrderType.cls
+--------------------------------------------------------------------------------
+Option Compare Database
+Option Explicit
+
+Private Sub Form_Open(Cancel As Integer)
+    ' Start with project picker hidden
+    Me.subProjectPicker.Visible = False
+    Me.btnProjOrdNext.Visible = False
+    Me.btnProjOrdNext.Enabled = False
+End Sub
+
+Private Sub btnSalesOrder_Click()
+    On Error GoTo EH
+
+    ' PATH 1: SALES ORDER
+    ' Get next BaseToken and default SystemLetter
+    Dim nextBase As Long
+    nextBase = NextSalesBaseToken()
+
+    If nextBase = 0 Then
+        MsgBox "Could not generate next Sales base token.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Build OpenArgs: "SALES:576045:P"
+    ' Format: OrderType:BaseToken:DefaultSystemLetter
+    Dim args As String
+    args = "SALES:" & CStr(nextBase) & ":P"
+
+    ' Close this dialog first, then open batch generator
+    DoCmd.Close acForm, Me.name, acSaveNo
+
+    DoCmd.OpenForm _
+        FormName:="dlgBatchGenerateOrders", _
+        WindowMode:=acDialog, _
+        OpenArgs:=args
+
+    Exit Sub
+
+EH:
+    MsgBox "Error opening Sales order: " & Err.Description, vbExclamation
+End Sub
+
+
+Private Sub btnProjectOrder_Click()
+    On Error GoTo EH
+
+    ' Ensure picker is visible so we can safely set focus if needed
+    Me.subProjectPicker.Visible = True
+    Me.btnProjOrdNext.Visible = True
+    Me.btnProjOrdNext.Enabled = False
+
+    ' Hide the type buttons safely
+    SafeHide Me.btnSalesOrder, Me.subProjectPicker
+    SafeHide Me.btnProjectOrder, Me.subProjectPicker
+
+    Exit Sub
+
+EH:
+    MsgBox "Error showing project selection: " & Err.Description, vbExclamation
+End Sub
+
+
+Private Sub btnProjOrdNext_Click()
+    On Error GoTo EH
+
+    ' Get selected project from subform
+    Dim selBase As String
+    selBase = Me.subProjectPicker.Form.GetSelectedProject()
+
+    If Len(selBase) = 0 Then
+        MsgBox "Please select a project.", vbExclamation
+        Exit Sub
+    End If
+
+    ' Build OpenArgs: "PROJECT:TAGO25:"
+    ' Format: OrderType:BaseToken:DefaultSystemLetter (blank for project)
+    Dim args As String
+    args = "PROJECT:" & selBase & ":"
+
+    ' Close this dialog first, then open batch generator
+    DoCmd.Close acForm, Me.name, acSaveNo
+
+    DoCmd.OpenForm _
+        FormName:="dlgBatchGenerateOrders", _
+        WindowMode:=acDialog, _
+        OpenArgs:=args
+
+    Exit Sub
+
+EH:
+    MsgBox "Error opening Project order: " & Err.Description, vbExclamation
+End Sub
+
+Private Sub btnCancel_Click()
+    DoCmd.Close acForm, Me.name, acSaveNo
+End Sub
+
+Private Sub SafeHide(ctrl As Control, Optional focusTarget As Control)
+    ' Moves focus to a safe target if ctrl currently has focus, then hides ctrl
+    If ctrl.Visible Then
+        If (Me.ActiveControl Is ctrl) Then
+            If Not focusTarget Is Nothing Then
+                focusTarget.SetFocus
+            Else
+                ' Fallback to a safe control (label or subform control you know is visible)
+                Me.subProjectPicker.SetFocus
+            End If
+        End If
+        ctrl.Visible = False
+    End If
+End Sub
+
+
+--------------------------------------------------------------------------------
+NAME:  Form_fsubProjectPicker
+TYPE:  Document(Form/Report)
+LINES: 20
+FILE:  Form_fsubProjectPicker.cls
+--------------------------------------------------------------------------------
+Option Compare Database
+Option Explicit
+
+Private Sub Form_Load()
+    Me.cboProjectSelect = Null
+End Sub
+
+Private Sub cboProjectSelect_AfterUpdate()
+    ' Enable the Next button on parent form when selection is made
+    If Nz(Me.cboProjectSelect, "") <> "" Then
+        Me.Parent.btnProjOrdNext.Enabled = True
+    Else
+        Me.Parent.btnProjOrdNext.Enabled = False
+    End If
+End Sub
+
+Public Function GetSelectedProject() As String
+    GetSelectedProject = Nz(Me.cboProjectSelect, "")
+End Function
+
+
+
+--------------------------------------------------------------------------------
+NAME:  basSalesOrdersIndexes
+TYPE:  StdModule
+LINES: 28
+FILE:  basSalesOrdersIndexes.bas
+--------------------------------------------------------------------------------
+
+Option Compare Database
+Option Explicit
+
+Public Sub DumpSalesOrdersIndexesToImmediate()
+    Dim tdf As DAO.TableDef
+    Dim idx As DAO.Index
+    Dim fld As DAO.Field
+    Dim s As String, f As String
+
+    Set tdf = CurrentDb.TableDefs("SalesOrders")
+    Debug.Print "----- INDEXES: SalesOrders -----"
+    For Each idx In tdf.Indexes
+        s = "Name=" & idx.name & _
+            "; Primary=" & idx.Primary & _
+            "; Unique=" & idx.Unique & _
+            "; IgnoreNulls=" & idx.IgnoreNulls
+        f = ""
+        Dim i As Integer
+        For i = 0 To idx.fields.Count - 1
+            f = f & IIf(i > 0, ",", "") & idx.fields(i).name
+        Next
+        Debug.Print s & "; Fields=[" & f & "]"
+    Next
+    Debug.Print "--------------------------------"
+End Sub
+
+
+
+
+--------------------------------------------------------------------------------
+NAME:  basOrderNumberGen
+TYPE:  StdModule
+LINES: 226
+FILE:  basOrderNumberGen.bas
+--------------------------------------------------------------------------------
+
+Option Compare Database
+Option Explicit
+
+'==========================
+' Public API
+'==========================
+
+' SALES: <BaseToken>-<SystemLetter><SeqNNN>-<BackorderNo>
+Public Function BuildSalesOrderNumber( _
+    ByVal BaseToken As String, _
+    ByVal SystemLetter As String, _
+    ByVal BackorderNo As Long) As String
+    
+    Dim nextSeq As Long
+    nextSeq = NextSeqForSales(BaseToken, SystemLetter)
+    BuildSalesOrderNumber = BaseToken & "-" & SystemLetter & Format(nextSeq, "000") & "-" & Format(BackorderNo, "00")
+End Function
+
+' PROJECT with qualifiers:
+' <BaseToken>-<QualifierCode><SystemLetter><SeqNNN>-<BackorderNo>
+' Returns "" if not enough info yet (e.g., no qualifier or no system letter).
+Public Function TryBuildProjectOrderNumber( _
+    ByVal SOID As Long, _
+    ByVal BaseToken As String, _
+    ByVal SystemLetter As Variant, _
+    ByVal BackorderNo As Long) As String
+    
+    TryBuildProjectOrderNumber = ""
+    
+    Dim sysLet As String
+    sysLet = Nz(SystemLetter, "")
+    If Len(sysLet) = 0 Then Exit Function   ' cannot build without SystemLetter
+    
+    ' Get the "primary" qualifier row for this order (pick smallest SequenceNo if present,
+    ' otherwise any non-deleted row).
+    Dim q As String
+    q = "SELECT TOP 1 QualifierCode, SequenceNo " & _
+        "FROM SalesOrderEntry " & _
+        "WHERE SOID=" & CLng(SOID) & " AND Nz(IsDeleted,False)=False " & _
+        "ORDER BY IIf(IsNull(SequenceNo), 999999, SequenceNo), SOEntryID;"
+    
+    Dim db As DAO.Database, rs As DAO.Recordset
+    Set db = CurrentDb
+    Set rs = db.OpenRecordset(q, dbOpenSnapshot)
+    
+    If rs.EOF And rs.BOF Then
+        rs.Close: Set rs = Nothing: Set db = Nothing
+        Exit Function  ' no qualifier yet => leave OrderNumber Null for now
+    End If
+    
+    Dim qual As String, seqNo As Variant
+    qual = Nz(rs!QualifierCode, "")
+    seqNo = rs!SequenceNo
+    rs.Close: Set rs = Nothing: Set db = Nothing
+    
+    If Len(qual) = 0 Then Exit Function  ' cannot build without a qualifier (by your rule)
+    
+    Dim nextSeq As Long
+    ' If this entry already has a SequenceNo, use it; else compute next and (optionally) persist it.
+    If Not IsNull(seqNo) And Len(seqNo & "") > 0 Then
+        nextSeq = CLng(seqNo)
+    Else
+        nextSeq = NextSeqForProject(BaseToken, sysLet, qual)
+        ' Optional: stamp this SequenceNo back into the first entry so UI shows it
+        On Error Resume Next
+        CurrentDb.Execute _
+            "UPDATE TOP 1 SalesOrderEntry " & _
+            "SET SequenceNo=" & nextSeq & " " & _
+            "WHERE SOID=" & CLng(SOID) & " AND Nz(IsDeleted,False)=False " & _
+            "AND QualifierCode='" & Replace(qual, "'", "''") & "' " & _
+            "AND (SequenceNo Is Null);", dbFailOnError
+        On Error GoTo 0
+    End If
+    
+    TryBuildProjectOrderNumber = BaseToken & "-" & qual & sysLet & Format(nextSeq, "000") & "-" & Format(BackorderNo, "00")
+End Function
+
+'==========================
+' Internals
+'==========================
+
+' SALES sequence — scan existing OrderNumber strings and extract the 3-digit seq
+' for matching BaseToken & SystemLetter. Return next = max + 1.
+Private Function NextSeqForSales( _
+    ByVal BaseToken As String, _
+    ByVal SystemLetter As String) As Long
+    
+    Dim db As DAO.Database, rs As DAO.Recordset
+    Dim sql As String
+    sql = "SELECT OrderNumber FROM SalesOrders " & _
+          "WHERE OrderType='SALES' " & _
+          "AND BaseToken='" & Replace(BaseToken, "'", "''") & "' " & _
+          "AND SystemLetter='" & Replace(SystemLetter, "'", "''") & "' " & _
+          "AND OrderNumber Is Not Null;"
+    
+    Set db = CurrentDb
+    Set rs = db.OpenRecordset(sql, dbOpenSnapshot)
+    
+    Dim maxSeq As Long, seq As Long
+    maxSeq = 0
+    Do While Not rs.EOF
+        seq = ExtractSeqFromOrderNumber(Nz(rs!OrderNumber, ""))
+        If seq > maxSeq Then maxSeq = seq
+        rs.MoveNext
+    Loop
+    rs.Close: Set rs = Nothing: Set db = Nothing
+    
+    NextSeqForSales = maxSeq + 1
+End Function
+
+' PROJECT sequence — scan existing OrderNumber strings for this BaseToken, SystemLetter,
+' and specific Qualifier prefix.
+Private Function NextSeqForProject( _
+    ByVal BaseToken As String, _
+    ByVal SystemLetter As String, _
+    ByVal QualifierCode As String) As Long
+    
+    Dim db As DAO.Database, rs As DAO.Recordset
+    Dim sql As String
+    sql = "SELECT OrderNumber FROM SalesOrders " & _
+          "WHERE OrderType='PROJECT' " & _
+          "AND BaseToken='" & Replace(BaseToken, "'", "''") & "' " & _
+          "AND SystemLetter='" & Replace(SystemLetter, "'", "''") & "' " & _
+          "AND OrderNumber Is Not Null;"
+    
+    Set db = CurrentDb
+    Set rs = db.OpenRecordset(sql, dbOpenSnapshot)
+    
+    Dim maxSeq As Long, seq As Long
+    Dim chunk As String
+    maxSeq = 0
+    Do While Not rs.EOF
+        chunk = GetChunkBetweenHyphens(Nz(rs!OrderNumber, ""))
+        ' Expect chunk like: <QualifierCode><SystemLetter><SeqNNN>
+        If Len(chunk) >= Len(QualifierCode) + 1 + 3 Then
+            If Left$(chunk, Len(QualifierCode)) = QualifierCode _
+               And Mid$(chunk, Len(QualifierCode) + 1, 1) = SystemLetter Then
+                seq = ExtractSeqFromOrderNumber(Nz(rs!OrderNumber, ""))
+                If seq > maxSeq Then maxSeq = seq
+            End If
+        End If
+        rs.MoveNext
+    Loop
+    rs.Close: Set rs = Nothing: Set db = Nothing
+    
+    NextSeqForProject = maxSeq + 1
+End Function
+
+' Extract the middle chunk between the two hyphens: "<chunk>" in "<Base>-<chunk>-<bo>"
+Private Function GetChunkBetweenHyphens(ByVal orderNo As String) As String
+    Dim parts() As String
+    If InStr(orderNo, "-") = 0 Then
+        GetChunkBetweenHyphens = ""
+        Exit Function
+    End If
+    parts = Split(orderNo, "-")
+    If UBound(parts) < 2 Then
+        GetChunkBetweenHyphens = ""
+    Else
+        GetChunkBetweenHyphens = parts(1)
+    End If
+End Function
+
+' Extract the trailing 3-digit number from the middle chunk.
+' Returns 0 if it cannot parse.
+Private Function ExtractSeqFromOrderNumber(ByVal orderNo As String) As Long
+    Dim chunk As String
+    chunk = GetChunkBetweenHyphens(orderNo)
+    If Len(chunk) < 3 Then
+        ExtractSeqFromOrderNumber = 0
+        Exit Function
+    End If
+    On Error Resume Next
+    ExtractSeqFromOrderNumber = CLng(Val(Right$(chunk, 3)))
+    On Error GoTo 0
+End Function
+
+' Build with retry (guard against rare collisions if two users save at same time).
+' Returns "" if it cannot build (e.g., PROJECT without qualifier/system).
+Public Function GenerateOrderNumberWithRetry( _
+    ByVal OrderType As String, _
+    ByVal SOID As Long, _
+    ByVal BaseToken As String, _
+    ByVal SystemLetter As Variant, _
+    ByVal BackorderNo As Long, _
+    Optional ByVal maxRetries As Long = 5) As String
+    
+    Dim sysLet As String
+    sysLet = Nz(SystemLetter, "")
+    
+    Dim attempt As Long
+    Dim candidate As String
+    
+    For attempt = 1 To maxRetries
+        If StrComp(OrderType, "SALES", vbTextCompare) = 0 Then
+            If Len(sysLet) = 0 Then sysLet = "P" ' belt & suspenders
+            candidate = BuildSalesOrderNumber(BaseToken, sysLet, BackorderNo)
+        ElseIf StrComp(OrderType, "PROJECT", vbTextCompare) = 0 Then
+            candidate = TryBuildProjectOrderNumber(SOID, BaseToken, sysLet, BackorderNo)
+            If Len(candidate) = 0 Then
+                ' Not enough info yet; let caller decide to leave Null
+                GenerateOrderNumberWithRetry = ""
+                Exit Function
+            End If
+        Else
+            GenerateOrderNumberWithRetry = ""
+            Exit Function
+        End If
+        
+        ' Unique check on OrderNumber
+        If DCount("*", "SalesOrders", "OrderNumber='" & Replace(candidate, "'", "''") & "'") = 0 Then
+            GenerateOrderNumberWithRetry = candidate
+            Exit Function
+        End If
+        
+        ' Collision => bump the underlying seq by pretending the new max is the collided value
+        ' (On next loop, the max-scanner will see it and return +1)
+        ' We don't write anything to DB here; just loop to compute the next candidate
+    Next attempt
+    
+    ' If we get here, we failed to generate a unique number within retry budget
+    GenerateOrderNumberWithRetry = ""
+End Function
+
+
+
+
+--------------------------------------------------------------------------------
+NAME:  basSeqAllocator
+TYPE:  StdModule
+LINES: 137
+FILE:  basSeqAllocator.bas
+--------------------------------------------------------------------------------
+
+'=== Module: basSeqAllocator ===
+Option Compare Database
+Option Explicit
+
+' Public API (unchanged signatures, plus a generic helper if you want it)
+Public Function ReserveSalesSeq(ByVal BaseToken As String, ByVal SystemLetter As String) As Long
+    ReserveSalesSeq = ReserveSeqCore("SALES", BaseToken, Null, SystemLetter)
+End Function
+
+Public Function ReserveProjectSeq(ByVal BaseToken As String, ByVal QualifierCode As String, ByVal SystemLetter As String) As Long
+    ReserveProjectSeq = ReserveSeqCore("PROJECT", BaseToken, QualifierCode, SystemLetter)
+End Function
+
+Public Function ReserveSeq( _
+    ByVal Scope As String, _
+    ByVal BaseToken As String, _
+    ByVal QualifierCode As String, _
+    ByVal SystemLetter As String, _
+    Optional ByVal IsPreview As Boolean = False _
+) As Long
+
+    Dim db As DAO.Database
+    Dim rs As DAO.Recordset
+    Dim sql As String
+    Dim nextSeq As Long
+
+    Set db = CurrentDb
+
+    sql = "SELECT * FROM OrderSeq " & _
+          "WHERE Scope = '" & Scope & "' " & _
+          "AND BaseToken = '" & BaseToken & "' " & _
+          "AND QualifierCode = '" & QualifierCode & "' " & _
+          "AND SystemLetter = '" & SystemLetter & "';"
+
+    Set rs = db.OpenRecordset(sql, dbOpenDynaset, dbSeeChanges)
+
+    If rs.EOF Then
+        ' first use — seed with 1
+        nextSeq = 1
+
+        If Not IsPreview Then
+            rs.AddNew
+            rs!Scope = Scope
+            rs!BaseToken = BaseToken
+            rs!QualifierCode = QualifierCode
+            rs!SystemLetter = SystemLetter
+            rs!nextSeq = 2
+            rs!LastUpdated = Now()
+            rs.Update
+        End If
+    Else
+        nextSeq = rs!nextSeq
+
+        If Not IsPreview Then
+            rs.Edit
+            rs!nextSeq = rs!nextSeq + 1
+            rs!LastUpdated = Now()
+            rs.Update
+        End If
+    End If
+
+    rs.Close
+    Set rs = Nothing
+    Set db = Nothing
+
+    ReserveSeq = nextSeq
+End Function
+
+
+' Core reservation: one-row, transactional, handles first insert + concurrent collisions
+Private Function ReserveSeqCore(ByVal Scope As String, _
+                                ByVal BaseToken As String, _
+                                ByVal QualifierCode As Variant, _
+                                ByVal SystemLetter As Variant) As Long
+    On Error GoTo EH
+
+    Dim db As DAO.Database
+    Dim rs As DAO.Recordset
+    Dim q As String
+
+    Set db = CurrentDb
+    DBEngine(0).BeginTrans
+
+    ' 1) Try to fetch the domain row
+    q = "SELECT * FROM OrderSeq " & _
+        "WHERE Scope='" & Replace(Scope, "'", "''") & "' " & _
+        "AND BaseToken='" & Replace(BaseToken, "'", "''") & "' " & _
+        IIf(IsNull(QualifierCode), "AND QualifierCode Is Null ", "AND QualifierCode='" & Replace(QualifierCode, "'", "''") & "' ") & _
+        IIf(IsNull(SystemLetter), "AND SystemLetter Is Null ", "AND SystemLetter='" & Replace(SystemLetter, "'", "''") & "' ")
+
+    Set rs = db.OpenRecordset(q, dbOpenDynaset, dbSeeChanges)
+
+    If rs.EOF Then
+        ' 2) First time this domain is used ? insert with NextSeq=2 and return 1
+        rs.AddNew
+        rs!Scope = Scope
+        rs!BaseToken = BaseToken
+        If IsNull(QualifierCode) Then rs!QualifierCode = Null Else rs!QualifierCode = QualifierCode
+        If IsNull(SystemLetter) Then rs!SystemLetter = Null Else rs!SystemLetter = SystemLetter
+        rs!nextSeq = 2
+        rs!LastUpdated = Now()
+        rs.Update
+        ReserveSeqCore = 1
+    Else
+        ' 3) Existing row ? lock & increment
+        Dim nextSeq As Long
+        nextSeq = Nz(rs!nextSeq, 1)
+        ReserveSeqCore = nextSeq
+        rs.Edit
+        rs!nextSeq = nextSeq + 1
+        rs!LastUpdated = Now()
+        rs.Update
+    End If
+
+    rs.Close: Set rs = Nothing
+    DBEngine(0).CommitTrans
+    Exit Function
+
+' 4) Handle a race on first insert (unique index violation 3022) ? reopen and increment
+EH:
+    If Err.Number = 3022 Then
+        On Error Resume Next
+        DBEngine(0).Rollback
+        On Error GoTo 0
+        ' Try again: now the row exists, so open/update path will succeed
+        ReserveSeqCore = ReserveSeqCore(Scope, BaseToken, QualifierCode, SystemLetter)
+        Exit Function
+    End If
+
+    On Error Resume Next
+    DBEngine(0).Rollback
+    ReserveSeqCore = 0
+End Function
+
+
+
+
+
+--------------------------------------------------------------------------------
+NAME:  basProjectAssignment
+TYPE:  StdModule
+LINES: 69
+FILE:  basProjectAssignment.bas
+--------------------------------------------------------------------------------
+Option Compare Database
+Option Explicit
+
+
+Public Sub AssignOrderNumberIfReady(ByVal SOID As Long)
+    On Error GoTo EH
+
+    Dim db As DAO.Database
+    Dim hdr As DAO.Recordset
+    Dim rs As DAO.Recordset
+    Dim BaseToken As String, sysLet As String, backNo As Long
+    Dim OrderType As String, qual As String
+    Dim seq As Long, candidate As String
+
+    Set db = CurrentDb
+
+    ' Load header row
+    Set hdr = db.OpenRecordset("SELECT * FROM SalesOrders WHERE SOID=" & CLng(SOID) & ";", dbOpenDynaset, dbSeeChanges)
+    If hdr.EOF Then GoTo Cleanup
+
+    If Not IsNull(hdr!OrderNumber) And Len(hdr!OrderNumber & "") > 0 Then GoTo Cleanup ' already assigned
+
+    OrderType = Nz(hdr!OrderType, "")
+    BaseToken = Nz(hdr!BaseToken, "")
+    sysLet = Nz(hdr!SystemLetter, "")
+    backNo = CLng(Nz(hdr!BackorderNo, 0))
+
+    ' Must have order type, base, and system letter
+    If Len(OrderType) = 0 Or Len(BaseToken) = 0 Or Len(sysLet) = 0 Then GoTo Cleanup
+
+    ' Find the primary qualifier:
+    '  1) lowest SequenceNo > 0
+    '  2) else lowest SOEntryID (non-deleted)
+    Dim q As String
+    q = "SELECT TOP 1 QualifierCode, SequenceNo " & _
+        "FROM SalesOrderEntry " & _
+        "WHERE SOID=" & CLng(SOID) & " AND Nz(IsDeleted,False)=False " & _
+        "ORDER BY IIf(Nz(SequenceNo,0) <= 0, 999999, SequenceNo), SOEntryID;"
+    Set rs = db.OpenRecordset(q, dbOpenSnapshot)
+
+    If rs.EOF Then GoTo Cleanup ' no qualifier yet ? not ready
+
+    qual = Nz(rs!QualifierCode, "")
+    If Len(qual) = 0 Then GoTo Cleanup
+
+    ' Reserve in the unified domain (scope = order type)
+    seq = ReserveSeq(OrderType, BaseToken, qual, sysLet)
+    If seq <= 0 Then GoTo Cleanup
+
+    candidate = BaseToken & "-" & qual & sysLet & Format(seq, "000") & "-" & Format(backNo, "00")
+
+    hdr.Edit
+    hdr!OrderNumber = candidate
+    hdr.Update
+
+Cleanup:
+    On Error Resume Next
+    If Not rs Is Nothing Then rs.Close
+    If Not hdr Is Nothing Then hdr.Close
+    Set rs = Nothing
+    Set hdr = Nothing
+    Set db = Nothing
+    Exit Sub
+
+EH:
+    Resume Cleanup
+End Sub
+
+
+
+
+--------------------------------------------------------------------------------
+NAME:  basResetRoutine
+TYPE:  StdModule
+LINES: 109
+FILE:  basResetRoutine.bas
+--------------------------------------------------------------------------------
+
+Option Compare Database
+Option Explicit
+
+Public Sub Reset_Qty_From_Qualifiers(Optional ByVal Silent As Boolean = False)
+    On Error GoTo EH
+    Dim db As DAO.Database
+    Set db = CurrentDb
+
+    ' Clear temp qty table
+    db.Execute "DELETE FROM tmpQualifierQty;", dbFailOnError
+
+    ' Re-seed from QualifierType (Active only), map QualifierName to Description
+    db.Execute _
+        "INSERT INTO tmpQualifierQty (QualifierCode, Description, Qty) " & _
+        "SELECT QualifierCode, QualifierName, 0 " & _
+        "FROM QualifierType " & _
+        "WHERE ActiveFlag=True " & _
+        "ORDER BY QualifierCode;", _
+        dbFailOnError
+
+    If Not Silent Then
+        MsgBox "Quantities reset from QualifierType.", vbInformation
+    Else
+        
+        'Optional: trace instead of pop-up
+            On Error Resume Next
+            Trace "Reset_Qty_From_Qualifiers (silent)"
+            On Error GoTo 0
+    End If
+
+    Exit Sub
+EH:
+    If Not Silent Then
+        MsgBox "Reset quantities failed: " & Err.Description, vbExclamation
+    Else
+        On Error Resume Next
+        Trace "Reset_Qty_From_Qualifiers EH (silent): " & Err.Number & " - " & Err.Description
+        On Error GoTo 0
+    End If
+
+End Sub
+
+
+Public Sub Ensure_QualifierType_Seed()
+    On Error GoTo EH
+
+    Dim db As DAO.Database: Set db = CurrentDb
+
+    ' Create a temp table variable for desired seeds
+    Dim seeds As Variant
+    ' Code, Name, ActiveFlag, SequenceWidth, AllowMultiple, Notes
+    seeds = Array( _
+        Array("CE", "Customer Equipment", True, 3, False, Null), _
+        Array("CD", "Customer Documentation", True, 3, False, Null), _
+        Array("CM", "Customer Material", True, 3, False, Null), _
+        Array("CO", "Customer On-Site Engineering", True, 3, False, Null), _
+        Array("YB", "Internal Yellow - Blue", True, 3, False, Null) _
+    )
+
+    Dim i As Long
+    For i = LBound(seeds) To UBound(seeds)
+        Dim qCode As String, qName As String
+        Dim active As Boolean, seqW As Long, allowMult As Boolean
+        Dim notesVal As Variant
+
+        qCode = seeds(i)(0)
+        qName = seeds(i)(1)
+        active = seeds(i)(2)
+        seqW = seeds(i)(3)
+        allowMult = seeds(i)(4)
+        notesVal = seeds(i)(5)
+
+        ' If not present, INSERT
+        If DCount("*", "QualifierType", "QualifierCode='" & Replace(qCode, "'", "''") & "'") = 0 Then
+            Dim sqlIns As String
+            sqlIns = "INSERT INTO QualifierType " & _
+                     "(QualifierCode, QualifierName, ActiveFlag, SequenceWidth, AllowMultiple, Notes) VALUES (" & _
+                     "'" & Replace(qCode, "'", "''") & "', " & _
+                     "'" & Replace(qName, "'", "''") & "', " & _
+                     IIf(active, "True", "False") & ", " & _
+                     seqW & ", " & _
+                     IIf(allowMult, "True", "False") & ", " & _
+                     IIf(IsNull(notesVal), "Null", "'" & Replace(CStr(notesVal), "'", "''") & "'") & ");"
+            db.Execute sqlIns, dbFailOnError
+        Else
+            ' Optional: keep names active and widths aligned with seed
+            Dim sqlUpd As String
+            sqlUpd = "UPDATE QualifierType SET " & _
+                     "QualifierName='" & Replace(qName, "'", "''") & "', " & _
+                     "ActiveFlag=" & IIf(active, "True", "False") & ", " & _
+                     "SequenceWidth=" & seqW & ", " & _
+                     "AllowMultiple=" & IIf(allowMult, "True", "False") & " " & _
+                     "WHERE QualifierCode='" & Replace(qCode, "'", "''") & "';"
+            db.Execute sqlUpd, dbFailOnError
+        End If
+    Next i
+
+    MsgBox "QualifierType seeded/updated (CE, CD, CM, CO, YB).", vbInformation
+    Exit Sub
+
+EH:
+    MsgBox "Ensure_QualifierType_Seed failed: " & Err.Description, vbExclamation
+End Sub
+
+
+
+
+
+
+
+--------------------------------------------------------------------------------
+NAME:  Form_dlgBatchGenerateOrders
+TYPE:  Document(Form/Report)
+LINES: 214
+FILE:  Form_dlgBatchGenerateOrders.cls
+--------------------------------------------------------------------------------
+
+'=== Form: dlgBatchGenerateOrders ===
+Option Compare Database
+Option Explicit
+
+
+Private Sub Form_Open(Cancel As Integer)
+    On Error GoTo EH
+
+    Trace "Dialog.Open"
+
+    ' Parse OpenArgs: "OrderType:BaseToken:DefaultSystemLetter"
+    Dim oa As String
+    oa = Nz(Me.OpenArgs, "")
+
+    If Len(oa) > 0 Then
+        Dim parts() As String
+        parts = Split(oa, ":")
+
+        ' Part 0: OrderType (SALES or PROJECT)
+        If UBound(parts) >= 0 Then
+            Me.cboOrderType = parts(0)
+            Me.cboOrderType.Locked = True
+            Me.cboOrderType.Enabled = False  ' Gray out to show locked
+        End If
+
+        ' Part 1: BaseToken
+        If UBound(parts) >= 1 Then
+            Me.txtBaseToken = parts(1)
+            Me.txtBaseToken.Locked = True
+            Me.txtBaseToken.Enabled = False  ' Gray out to show locked
+        End If
+
+        ' Part 2: Default SystemLetter (optional)
+        If UBound(parts) >= 2 And Len(parts(2)) > 0 Then
+            Me.cboSystemLetter = parts(2)
+            ' SystemLetter remains unlocked for user to change
+        End If
+    End If
+
+    ' Bind preview list
+    Me.lstPreview.RowSource = "SELECT OrderNumber FROM tmpBatchPreview ORDER BY OrderNumber;"
+
+    Exit Sub
+
+EH:
+    MsgBox "Dialog open failed: " & Err.Description, vbExclamation
+    Cancel = True
+End Sub
+
+Private Sub Form_Load()
+    On Error GoTo EH
+    Me.lblCustomerCodeHelp.Visible = False
+
+    ' Reset temp data before user sees the subform
+    Reset_Qty_From_Qualifiers True
+
+    ' Make sure subform reflects the fresh rows
+    ' (Use the subform CONTROL name, not the subform's form name)
+    Me.subQty.Requery
+
+    ' Also clear preview list just in case you expect it empty on load
+    ' If you prefer it empty initially:
+    CurrentDb.Execute "DELETE FROM tmpBatchPreview;", dbFailOnError
+    Me.lstPreview.Requery
+
+    Exit Sub
+EH:
+    MsgBox "Load failed: " & Err.Description, vbExclamation
+End Sub
+
+
+Private Sub Form_Unload(Cancel As Integer)
+    Trace "Dialog.Unload"
+End Sub
+
+Private Sub Form_Close()
+    Trace "Dialog.Close"
+End Sub
+
+Private Sub cboCustomerCode_Enter()
+    Me.lblCustomerCodeHelp.Visible = True
+End Sub
+
+Private Sub cboCustomerCode_AfterUpdate()
+    On Error Resume Next
+    Me.lblCustomerCodeHelp.Visible = False
+    Me.txtCustomerName = Nz(Me.cboCustomerCode.Column(1), "")
+End Sub
+
+Private Sub cmdReset_Click()
+    On Error GoTo EH
+    Reset_Qty_From_Qualifiers False
+    Me.subQty.Requery
+    CurrentDb.Execute "DELETE FROM tmpBatchPreview;", dbFailOnError
+    Me.lstPreview.Requery
+    Exit Sub
+EH:
+    MsgBox "Reset failed: " & Err.Description, vbExclamation
+End Sub
+
+Private Function ValidateHeader(ByRef Scope As String, ByRef baseT As String, ByRef sysLet As String) As Boolean
+    Scope = Nz(Me.cboOrderType, "")
+    baseT = Nz(Me.txtBaseToken, "")
+    sysLet = Nz(Me.cboSystemLetter, "")
+    If Len(Scope) = 0 Then MsgBox "Order Type is required.", vbExclamation: Exit Function
+    If Len(baseT) = 0 Then MsgBox "Base Token is required.", vbExclamation: Exit Function
+    If Len(sysLet) = 0 Then MsgBox "System Letter is required.", vbExclamation: Exit Function
+    ValidateHeader = True
+End Function
+
+Private Function HasAnyQty() As Boolean
+    HasAnyQty = (DCount("*", "tmpQualifierQty", "Nz(Qty,0)>0") > 0)
+End Function
+Private Sub cmdPreview_Click()
+    On Error GoTo EH
+
+    Dim Scope As String, baseT As String, sysLet As String
+    If Not ValidateHeader(Scope, baseT, sysLet) Then Exit Sub
+    If Not HasAnyQty() Then
+        MsgBox "Enter at least one quantity > 0.", vbExclamation
+        Exit Sub
+    End If
+
+    Trace "Dialog.Preview: start"
+    BuildPreview
+    Me.lstPreview.Requery
+    Trace "Dialog.Preview: done"
+    Exit Sub
+
+EH:
+    MsgBox "Preview failed: " & Err.Description, vbExclamation
+End Sub
+
+Private Sub cmdCommit_Click()
+    On Error GoTo EH
+
+    Trace "Dialog.Commit: start"
+    Err.Clear
+
+    Dim Scope As String, baseT As String, sysLet As String
+    If Not ValidateHeader(Scope, baseT, sysLet) Then Exit Sub
+    If Not HasAnyQty() Then
+        MsgBox "Enter at least one quantity > 0.", vbExclamation
+        Exit Sub
+    End If
+
+    Dim created As Long, BatchID As String
+    Dim custCode As Variant, custName As Variant, poNum As Variant, dtRecv As Variant
+    custCode = Nz(Me.cboCustomerCode, Null)
+    custName = Nz(Me.txtCustomerName, Null)
+    poNum = Nz(Me.txtPONumber, Null)
+    dtRecv = Nz(Me.txtDateReceived, Null)
+
+    ' Use your existing CommitBatch signature exactly as-is
+    If CommitBatch(Scope, baseT, sysLet, custCode, custName, poNum, dtRecv, created, BatchID) Then
+        ' Report success via TempVars (caller will decide what to do)
+        On Error Resume Next
+        TempVars("BatchResult") = "Committed"
+        TempVars("BatchID") = BatchID
+        TempVars("CreatedCount") = CStr(created)
+        TempVars.Remove "BatchErr"
+        On Error GoTo 0
+
+        Trace "Dialog.Commit: success"
+        Err.Clear                 ' <-- prevent stale Err from bubbling to the launcher
+        
+        
+                ' --- AUDIT: Batch committed (1 row per batch) ---
+    Dim auditReason As String
+    auditReason = "BatchID=" & BatchID & _
+              "; CreatedCount=" & created & _
+              "; Scope=" & Scope & _
+              "; BaseToken=" & baseT & _
+              "; SystemLetter=" & sysLet & _
+              "; CustomerCode=" & Nz(custCode, "") & _
+              "; CustomerName=" & Nz(custName, "") & _
+              "; PONumber=" & Nz(poNum, "") & _
+              "; DateReceived=" & IIf(IsDate(dtRecv), Format$(CDate(dtRecv), "yyyy-mm-dd"), "")
+
+    ' SOID=0 because this is a batch-level event (multiple orders)
+    LogOrderAction 0, "", "BATCH_COMMIT", "", "", auditReason
+        DoCmd.Close acForm, Me.name, acSaveNo
+        Exit Sub
+    Else
+        ' False without Err.Number—treat as error and surface a concise message
+        On Error Resume Next
+        TempVars("BatchResult") = "Error"
+        TempVars("BatchErr") = "Commit returned False without Err"
+        On Error GoTo 0
+        Trace "Dialog.Commit: returned False without Err"
+        MsgBox "Commit failed.", vbExclamation
+        Exit Sub
+    End If
+
+EH:
+    On Error Resume Next
+    TempVars("BatchResult") = "Error"
+    TempVars("BatchErr") = Err.Number & ": " & Err.Description
+    Trace "Dialog.Commit: EH " & TempVars("BatchErr")
+    ' --- AUDIT: Batch commit failed ---
+    LogOrderAction 0, "", "BATCH_COMMIT_FAILED", "", "", "Err " & Err.Number & ": " & Err.Description
+    On Error GoTo 0
+    MsgBox "Commit failed: " & Nz(TV("BatchErr", "(unknown)"), "(unknown)"), vbCritical
+End Sub
+
+Private Sub cmdCancel_Click()
+    On Error Resume Next
+    TempVars("BatchResult") = "Canceled"
+    TempVars.Remove "BatchErr"
+    Trace "Dialog.Cancel"
+    DoCmd.Close acForm, Me.name, acSaveNo
+End Sub
+
+
+
+--------------------------------------------------------------------------------
+NAME:  basBatchWizard
+TYPE:  StdModule
+LINES: 370
+FILE:  basBatchWizard.bas
+--------------------------------------------------------------------------------
+
+'=== Module: basBatchWizard ===
+Option Compare Database
+Option Explicit
+
+'-------------------------------------------------------
+' Module-level state populated by BuildPreview
+'-------------------------------------------------------
+Dim mScope As String
+Dim mBaseToken As String
+Dim mSystemLetter As String
+Dim mBackorderNo As Long
+
+
+'--------------------------------------------
+' Utility: get a GUID string (BatchID) - 36 chars, no braces
+'--------------------------------------------
+Public Function NewGuidString() As String
+    On Error GoTo fallback
+    Dim g As String
+    g = CreateObject("Scriptlet.TypeLib").Guid  ' e.g., "{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}"
+    NewGuidString = Mid$(g, 2, 36)              ' strip braces -> 36 chars
+    Exit Function
+fallback:
+    ' Fallback: synthesize a 36-char hex GUID-like string (no braces)
+    ' NOTE: Not cryptographically strong; fine for local IDs.
+    Randomize
+    NewGuidString = MakeHexBlock(8) & "-" & MakeHexBlock(4) & "-" & _
+                    MakeHexBlock(4) & "-" & MakeHexBlock(4) & "-" & MakeHexBlock(12)
+End Function
+
+Private Function MakeHexBlock(n As Long) As String
+    Dim i As Long, s As String
+    For i = 1 To n
+        s = s & Mid$("0123456789ABCDEF", Int(Rnd() * 16) + 1, 1)
+    Next
+    MakeHexBlock = s
+End Function
+'--------------------------------------------
+' PREVIEW: compute predicted numbers (NO DB writes to OrderSeq)
+' Uses OrderSeq.nextSeq as the starting sequence per:
+'   (Scope, BaseToken, QualifierCode, SystemLetter)
+'--------------------------------------------
+Public Sub BuildPreview()
+    On Error GoTo EH
+
+    Dim db As DAO.Database
+    Dim rsQ As DAO.Recordset
+    Dim rsStart As DAO.Recordset
+    Dim qdfStart As DAO.QueryDef
+    Dim qdfIns As DAO.QueryDef
+
+    Dim i As Long, qty As Long
+    Dim seq As Long, startSeq As Long
+    Dim orderNum As String
+
+    Dim nextSeqByQual As Object 'Scripting.Dictionary
+
+    Dim pScope As String
+    Dim pBaseToken As String
+    Dim pSystemLetter As String
+    Dim pBackorderNo As Long
+
+    Dim qual As String
+    Dim qualParam As Variant
+
+    Set db = CurrentDb
+    Set nextSeqByQual = CreateObject("Scripting.Dictionary")
+
+    '---- pull parameters from form
+    With forms!dlgBatchGenerateOrders
+        pScope = Nz(.cboOrderType, "")
+        pBaseToken = Nz(.txtBaseToken, "")
+        pSystemLetter = Nz(.cboSystemLetter, "")
+        pBackorderNo = CLng(Nz(.txtBackOrderNo, 0))
+    End With
+
+    '---- clear preview table
+    db.Execute "DELETE FROM tmpBatchPreview;", dbFailOnError
+
+    '---- guardrails
+    If Len(pScope) = 0 Or Len(pBaseToken) = 0 Or Len(pSystemLetter) = 0 Then
+        GoTo Cleanup
+    End If
+
+    '---- qualifiers + quantities
+    Set rsQ = db.OpenRecordset( _
+        "SELECT QualifierCode, Qty " & _
+        "FROM tmpQualifierQty " & _
+        "WHERE Nz(Qty,0) > 0 " & _
+        "ORDER BY QualifierCode;", _
+        dbOpenSnapshot _
+    )
+
+    If rsQ.EOF Then GoTo Cleanup
+
+    '===========================================================
+    ' Prepared query: get nextSeq from OrderSeq for this domain.
+    ' Handles Null-vs-empty-string for QualifierCode via OR clause:
+    '   (QualifierCode = pQualifierCode) OR (pQualifierCode IS NULL AND QualifierCode IS NULL)
+    '===========================================================
+    Set qdfStart = db.CreateQueryDef("", _
+        "PARAMETERS pScope TEXT(20), pBaseToken TEXT(50), pQualifierCode TEXT(20), pSystemLetter TEXT(10);" & vbCrLf & _
+        "SELECT nextSeq" & vbCrLf & _
+        "FROM OrderSeq" & vbCrLf & _
+        "WHERE Scope = [pScope]" & vbCrLf & _
+        "  AND BaseToken = [pBaseToken]" & vbCrLf & _
+        "  AND SystemLetter = [pSystemLetter]" & vbCrLf & _
+        "  AND (QualifierCode = [pQualifierCode] OR ([pQualifierCode] IS NULL AND QualifierCode IS NULL));" _
+    )
+
+    '---- Prepared insert into tmpBatchPreview (parameterized)
+    Set qdfIns = db.CreateQueryDef("", _
+        "PARAMETERS pOrderNumber TEXT(255), pQualifierCode TEXT(20), pSeqNo LONG;" & vbCrLf & _
+        "INSERT INTO tmpBatchPreview (OrderNumber, QualifierCode, SeqNo) " & vbCrLf & _
+        "VALUES ([pOrderNumber], [pQualifierCode], [pSeqNo]);" _
+    )
+
+    '===========================================================
+    ' Build preview
+    '===========================================================
+    Do While Not rsQ.EOF
+        qual = Trim$(Nz(rsQ!QualifierCode, ""))
+        qty = CLng(Nz(rsQ!qty, 0))
+
+        If qty > 0 Then
+
+            'Use Null parameter if qualifier is blank (matches rows where QualifierCode Is Null)
+            If Len(qual) = 0 Then
+                qualParam = Null
+            Else
+                qualParam = qual
+            End If
+
+            'Seed starting sequence ONCE per qualifier
+            If Not nextSeqByQual.Exists(qual) Then
+                qdfStart.Parameters!pScope = pScope
+                qdfStart.Parameters!pBaseToken = pBaseToken
+                qdfStart.Parameters!pSystemLetter = pSystemLetter
+                qdfStart.Parameters!pQualifierCode = qualParam
+
+                Set rsStart = qdfStart.OpenRecordset(dbOpenSnapshot)
+
+                If rsStart.EOF Then
+                    startSeq = 1
+                Else
+                    startSeq = CLng(Nz(rsStart!nextSeq, 1))
+                    If startSeq < 1 Then startSeq = 1
+                End If
+
+                rsStart.Close
+                Set rsStart = Nothing
+
+                nextSeqByQual(qual) = startSeq
+            End If
+
+            'Emit qty rows for this qualifier (independent counter)
+            For i = 1 To qty
+                seq = CLng(nextSeqByQual(qual))
+                nextSeqByQual(qual) = seq + 1
+
+                orderNum = pBaseToken & "-" & _
+                           qual & pSystemLetter & Format$(seq, "000") & "-" & _
+                           Format$(pBackorderNo, "00")
+
+                qdfIns.Parameters!pOrderNumber = orderNum
+                qdfIns.Parameters!pQualifierCode = qual
+                qdfIns.Parameters!pSeqNo = seq
+                qdfIns.Execute dbFailOnError
+            Next i
+
+        End If
+
+        rsQ.MoveNext
+    Loop
+
+Cleanup:
+    On Error Resume Next
+    If Not rsQ Is Nothing Then rsQ.Close
+    If Not rsStart Is Nothing Then rsStart.Close
+    Set rsQ = Nothing
+    Set rsStart = Nothing
+    Set qdfStart = Nothing
+    Set qdfIns = Nothing
+    Set nextSeqByQual = Nothing
+    Set db = Nothing
+    Exit Sub
+
+EH:
+    MsgBox "Preview failed: " & Err.Number & " - " & Err.Description, vbExclamation
+    Resume Cleanup
+End Sub
+
+'=========================
+' Helpers
+'=========================
+
+Private Function ResolveTableName(ByVal db As DAO.Database, ByVal candidates As Variant) As String
+    Dim i As Long, nm As String
+    For i = LBound(candidates) To UBound(candidates)
+        nm = CStr(candidates(i))
+        If TableExists(db, nm) Then
+            ResolveTableName = nm
+            Exit Function
+        End If
+    Next i
+    ResolveTableName = vbNullString
+End Function
+
+Private Function TableExists(ByVal db As DAO.Database, ByVal tableName As String) As Boolean
+    Dim tdf As DAO.TableDef
+    On Error GoTo No
+    Set tdf = db.TableDefs(tableName)
+    TableExists = True
+    Exit Function
+No:
+    TableExists = False
+End Function
+
+Private Function ResolveFieldName(ByVal db As DAO.Database, ByVal tableName As String, ByVal candidates As Variant) As String
+    Dim i As Long, fld As String
+    For i = LBound(candidates) To UBound(candidates)
+        fld = CStr(candidates(i))
+        If FieldExists(db, tableName, fld) Then
+            ResolveFieldName = fld
+            Exit Function
+        End If
+    Next i
+    ResolveFieldName = vbNullString
+End Function
+
+Private Function RequireField(ByVal db As DAO.Database, ByVal tableName As String, ByVal fieldName As String) As String
+    If Not FieldExists(db, tableName, fieldName) Then
+        Err.Raise vbObjectError + 6010, "BuildPreview", _
+                  "Missing required field [" & fieldName & "] in table [" & tableName & "]."
+    End If
+    RequireField = fieldName
+End Function
+
+Private Function FieldExists(ByVal db As DAO.Database, ByVal tableName As String, ByVal fieldName As String) As Boolean
+    Dim tdf As DAO.TableDef
+    Dim f As DAO.Field
+    On Error GoTo No
+    Set tdf = db.TableDefs(tableName)
+    Set f = tdf.fields(fieldName)
+    FieldExists = True
+    Exit Function
+No:
+    FieldExists = False
+End Function
+
+'--------------------------------------------
+' COMMIT one order (header + entry)
+'--------------------------------------------
+Private Sub CreateOneOrder( _
+    ByVal Scope As String, _
+    ByVal BaseToken As String, _
+    ByVal QualifierCode As String, _
+    ByVal SystemLetter As String, _
+    ByVal CustomerCode As Variant, _
+    ByVal CustomerName As Variant, _
+    ByVal PONumber As Variant, _
+    ByVal DateReceived As Variant, _
+    ByVal BatchID As String _
+)
+    On Error GoTo EH
+
+    Dim db As DAO.Database
+    Dim rsH As DAO.Recordset, rsE As DAO.Recordset
+    Dim seq As Long, SOID As Long, orderNo As String
+
+    Set db = CurrentDb
+
+    seq = ReserveSeq(Scope, BaseToken, QualifierCode, SystemLetter, False)
+    If seq <= 0 Then Err.Raise vbObjectError + 4001, , "Sequence allocation failed."
+
+    orderNo = BaseToken & "-" & QualifierCode & SystemLetter & _
+              Format(seq, "000") & "-00"
+
+    Set rsH = db.OpenRecordset("SalesOrders", dbOpenDynaset, dbSeeChanges)
+    rsH.AddNew
+        rsH!OrderType = Scope
+        rsH!BaseToken = BaseToken
+        rsH!SystemLetter = SystemLetter
+        rsH!BackorderNo = 0
+        rsH!CustomerCode = Nz(CustomerCode, Null)
+        rsH!CustomerName = Nz(CustomerName, Null)
+        rsH!PONumber = Nz(PONumber, Null)
+        rsH!DateReceived = IIf(IsDate(DateReceived), DateReceived, Null)
+        rsH!ActiveFlag = True
+        rsH!OrderNumber = orderNo
+        rsH!BatchID = BatchID
+    rsH.Update
+    rsH.Bookmark = rsH.LastModified
+    SOID = rsH!SOID
+    rsH.Close
+
+    Set rsE = db.OpenRecordset("SalesOrderEntry", dbOpenDynaset, dbSeeChanges)
+    rsE.AddNew
+        rsE!SOID = SOID
+        rsE!QualifierCode = QualifierCode
+        rsE!SequenceNo = seq
+        rsE!IsDeleted = False
+        rsE!CreatedOn = Now()
+        rsE!OrderNumberDisplay = QualifierCode & SystemLetter & Format(seq, "000")
+    rsE.Update
+    rsE.Close
+
+    Exit Sub
+EH:
+    Err.Raise Err.Number, "CreateOneOrder", Err.Description
+End Sub
+
+'--------------------------------------------
+' COMMIT the whole batch (ATOMIC)
+'--------------------------------------------
+Public Function CommitBatch( _
+    ByVal Scope As String, _
+    ByVal BaseToken As String, _
+    ByVal SystemLetter As String, _
+    ByVal CustomerCode As Variant, _
+    ByVal CustomerName As Variant, _
+    ByVal PONumber As Variant, _
+    ByVal DateReceived As Variant, _
+    ByRef CreatedCount As Long, _
+    ByRef BatchID As String _
+) As Boolean
+    On Error GoTo EH
+
+    Dim db As DAO.Database
+    Dim rs As DAO.Recordset
+    Dim qual As String, qty As Long, i As Long
+
+    Set db = CurrentDb
+    CreatedCount = 0
+    BatchID = Mid$(NewGuidString(), 2, 36)
+
+    DBEngine(0).BeginTrans
+
+    Set rs = db.OpenRecordset( _
+        "SELECT QualifierCode, Qty FROM tmpQualifierQty WHERE Nz(Qty,0) > 0", _
+        dbOpenSnapshot _
+    )
+
+    Do While Not rs.EOF
+        qual = rs!QualifierCode
+        qty = CLng(rs!qty)
+
+        For i = 1 To qty
+            CreateOneOrder Scope, BaseToken, qual, SystemLetter, _
+                           CustomerCode, CustomerName, PONumber, DateReceived, BatchID
+            CreatedCount = CreatedCount + 1
+        Next
+
+        rs.MoveNext
+    Loop
+
+    rs.Close
+    DBEngine(0).CommitTrans
+    CommitBatch = True
+    Exit Function
+
+EH:
+    On Error Resume Next
+    DBEngine(0).Rollback
+    MsgBox "Commit failed: " & Err.Description, vbCritical
+    CommitBatch = False
+End Function
+
+
+
+
+--------------------------------------------------------------------------------
+NAME:  basAIContext
+TYPE:  StdModule
+LINES: 641
+FILE:  basAIContext.bas
+--------------------------------------------------------------------------------
+Option Compare Database
+Option Explicit
+
+' ============================================================
+' AI Context Export for Microsoft Access
+' Creates a comprehensive context file for AI assistants
+' (Copilot, Claude, ChatGPT, etc.)
+'
+' Entry point:
+'   Call ExportAIContext
+'   Call ExportAIContext "C:\MyFolder"  ' custom output path
+' ============================================================
+
+Public Sub ExportAIContext(Optional ByVal outputFolder As String = "")
+    On Error GoTo ErrHandler
+
+    ' Default to database folder if not specified
+    If Len(outputFolder) = 0 Then
+        outputFolder = CurrentProject.path
+    End If
+
+    Dim report As String, ts As String, outFile As String
+    ts = Format(Now, "yyyy-mm-dd_hhnnss")
+    outFile = BuildPath(outputFolder, "AI_Context_" & GetDbNameOnly() & "_" & ts & ".txt")
+
+    ' Build the context document
+    report = BuildAISummaryHeader()
+    report = report & BuildEnvironmentSection()
+    report = report & BuildTableSchemaSection()
+    report = report & BuildRelationshipsSection()
+    report = report & BuildQueriesSection()
+    report = report & BuildAllFormsSection()
+    report = report & BuildAllReportsSection()
+    report = report & BuildAllCodeModulesSection()
+
+    ' Write output
+    EnsureFolder outputFolder
+    WriteFile outFile, report
+
+    MsgBox "AI Context exported to:" & vbCrLf & vbCrLf & outFile, vbInformation, "Export Complete"
+    Exit Sub
+
+ErrHandler:
+    MsgBox "ExportAIContext failed:" & vbCrLf & Err.Number & " - " & Err.Description, vbCritical
+End Sub
+
+' ============================================================
+' Summary Header - Quick overview for AI
+' ============================================================
+
+Private Function BuildAISummaryHeader() As String
+    Dim s As String
+    Dim tblCount As Long, qryCount As Long, frmCount As Long, rptCount As Long, modCount As Long
+
+    tblCount = GetUserTableCount()
+    qryCount = CurrentData.AllQueries.Count
+    frmCount = CurrentProject.AllForms.Count
+    rptCount = CurrentProject.AllReports.Count
+    modCount = GetCodeModuleCount()
+
+    s = "================================================================" & vbCrLf
+    s = s & "AI CONTEXT PACKAGE - MICROSOFT ACCESS DATABASE" & vbCrLf
+    s = s & "================================================================" & vbCrLf
+    s = s & "Generated: " & Now & vbCrLf
+    s = s & "Database: " & CurrentProject.name & vbCrLf
+    s = s & "Path: " & CurrentDb.name & vbCrLf
+    s = s & vbCrLf
+    s = s & "QUICK STATS:" & vbCrLf
+    s = s & "  Tables: " & tblCount & vbCrLf
+    s = s & "  Queries: " & qryCount & vbCrLf
+    s = s & "  Forms: " & frmCount & vbCrLf
+    s = s & "  Reports: " & rptCount & vbCrLf
+    s = s & "  Code Modules: " & modCount & vbCrLf
+    s = s & vbCrLf
+    s = s & "This file contains the complete structure and code of this" & vbCrLf
+    s = s & "Access database for AI assistant context." & vbCrLf
+    s = s & "================================================================" & vbCrLf & vbCrLf
+
+    BuildAISummaryHeader = s
+End Function
+
+' ============================================================
+' Environment Section
+' ============================================================
+
+Private Function BuildEnvironmentSection() As String
+    Dim s As String
+    Dim linkedCount As Long, localCount As Long
+
+    s = SectionHeader("ENVIRONMENT")
+    s = s & "Access Version: " & Application.Version & " (" & GetBitness() & ")" & vbCrLf
+    s = s & "Windows: " & GetWindowsVersion() & vbCrLf
+    s = s & vbCrLf
+
+    ' Split database info
+    GetTableCounts linkedCount, localCount
+    s = s & "Database Type: " & IIf(linkedCount > 0, "Split (Front-end/Back-end)", "Standalone") & vbCrLf
+    s = s & "Local Tables: " & localCount & vbCrLf
+    s = s & "Linked Tables: " & linkedCount & vbCrLf
+
+    If linkedCount > 0 Then
+        s = s & vbCrLf & "Back-end Source(s):" & vbCrLf
+        s = s & GetBackendList()
+    End If
+
+    s = s & vbCrLf & "VBA References:" & vbCrLf
+    s = s & GetReferences() & vbCrLf
+
+    BuildEnvironmentSection = s
+End Function
+
+' ============================================================
+' Table Schema Section - Field definitions, types, indexes
+' ============================================================
+
+Private Function BuildTableSchemaSection() As String
+    Dim db As DAO.Database: Set db = CurrentDb
+    Dim tdf As DAO.TableDef
+    Dim fld As DAO.Field
+    Dim idx As DAO.Index
+    Dim s As String, rowCount As Long
+
+    s = SectionHeader("TABLE SCHEMA")
+
+    For Each tdf In db.TableDefs
+        If Left$(tdf.name, 4) <> "MSys" And Left$(tdf.name, 1) <> "~" Then
+            s = s & "----------------------------------------" & vbCrLf
+            s = s & "TABLE: " & tdf.name
+
+            ' Get row count
+            On Error Resume Next
+            rowCount = DCount("*", tdf.name)
+            If Err.Number = 0 Then
+                s = s & " (" & rowCount & " rows)"
+            End If
+            On Error GoTo 0
+
+            ' Show if linked
+            If Len(tdf.Connect & "") > 0 Then
+                s = s & " [LINKED]"
+            End If
+            s = s & vbCrLf & vbCrLf
+
+            ' Fields
+            s = s & "  Fields:" & vbCrLf
+            For Each fld In tdf.fields
+                s = s & "    - " & fld.name & " : " & GetFieldTypeName(fld.Type)
+                If fld.Size > 0 And fld.Type = dbText Then
+                    s = s & "(" & fld.Size & ")"
+                End If
+                If fld.Required Then s = s & " NOT NULL"
+                If Len(fld.defaultValue & "") > 0 Then s = s & " DEFAULT " & fld.defaultValue
+                s = s & vbCrLf
+            Next
+
+            ' Primary Key
+            s = s & vbCrLf & "  Primary Key: "
+            On Error Resume Next
+            Dim pk As DAO.Index
+            Set pk = Nothing
+            For Each idx In tdf.Indexes
+                If idx.Primary Then
+                    Set pk = idx
+                    Exit For
+                End If
+            Next
+            If pk Is Nothing Then
+                s = s & "(none)" & vbCrLf
+            Else
+                s = s & GetIndexFields(pk) & vbCrLf
+            End If
+            On Error GoTo 0
+
+            ' Other Indexes
+            s = s & "  Indexes:" & vbCrLf
+            Dim hasIdx As Boolean: hasIdx = False
+            For Each idx In tdf.Indexes
+                If Not idx.Primary Then
+                    hasIdx = True
+                    s = s & "    - " & idx.name & ": " & GetIndexFields(idx)
+                    If idx.Unique Then s = s & " [UNIQUE]"
+                    s = s & vbCrLf
+                End If
+            Next
+            If Not hasIdx Then s = s & "    (none)" & vbCrLf
+
+            s = s & vbCrLf
+        End If
+    Next
+
+    BuildTableSchemaSection = s
+End Function
+
+' ============================================================
+' Relationships Section
+' ============================================================
+
+Private Function BuildRelationshipsSection() As String
+    Dim db As DAO.Database: Set db = CurrentDb
+    Dim rel As DAO.Relation
+    Dim fld As DAO.Field
+    Dim s As String, attrs As String, fields As String
+
+    s = SectionHeader("RELATIONSHIPS")
+
+    If db.Relations.Count = 0 Then
+        s = s & "(No relationships defined)" & vbCrLf & vbCrLf
+        BuildRelationshipsSection = s
+        Exit Function
+    End If
+
+    For Each rel In db.Relations
+        s = s & rel.Table & " -> " & rel.ForeignTable & vbCrLf
+
+        ' Fields
+        fields = "  Fields: "
+        For Each fld In rel.fields
+            fields = fields & fld.name & " -> " & fld.ForeignName & ", "
+        Next
+        If Len(fields) > 10 Then fields = Left$(fields, Len(fields) - 2)
+        s = s & fields & vbCrLf
+
+        ' Attributes
+        s = s & "  Attributes: "
+        If (rel.Attributes And dbRelationDontEnforce) = 0 Then
+            s = s & "Enforced"
+            If (rel.Attributes And dbRelationUpdateCascade) <> 0 Then s = s & ", Cascade Update"
+            If (rel.Attributes And dbRelationDeleteCascade) <> 0 Then s = s & ", Cascade Delete"
+        Else
+            s = s & "Not Enforced"
+        End If
+        s = s & vbCrLf & vbCrLf
+    Next
+
+    BuildRelationshipsSection = s
+End Function
+
+' ============================================================
+' Queries Section - All query SQL
+' ============================================================
+
+Private Function BuildQueriesSection() As String
+    Dim db As DAO.Database: Set db = CurrentDb
+    Dim qdf As DAO.QueryDef
+    Dim s As String
+
+    s = SectionHeader("QUERIES")
+
+    If db.QueryDefs.Count = 0 Then
+        s = s & "(No queries defined)" & vbCrLf & vbCrLf
+        BuildQueriesSection = s
+        Exit Function
+    End If
+
+    For Each qdf In db.QueryDefs
+        ' Skip system/temp queries
+        If Left$(qdf.name, 1) <> "~" Then
+            s = s & "--- QUERY: " & qdf.name & " ---" & vbCrLf
+            s = s & "Type: " & GetQueryTypeName(qdf.Type) & vbCrLf
+            s = s & "SQL:" & vbCrLf
+            s = s & qdf.sql & vbCrLf & vbCrLf
+        End If
+    Next
+
+    BuildQueriesSection = s
+End Function
+
+' ============================================================
+' Forms Section - All forms via SaveAsText
+' ============================================================
+
+Private Function BuildAllFormsSection() As String
+    Dim frm As AccessObject
+    Dim s As String
+
+    s = SectionHeader("FORMS")
+
+    If CurrentProject.AllForms.Count = 0 Then
+        s = s & "(No forms in database)" & vbCrLf & vbCrLf
+        BuildAllFormsSection = s
+        Exit Function
+    End If
+
+    For Each frm In CurrentProject.AllForms
+        s = s & "=== FORM: " & frm.name & " ===" & vbCrLf
+        s = s & GetSaveAsTextContent(acForm, frm.name) & vbCrLf & vbCrLf
+    Next
+
+    BuildAllFormsSection = s
+End Function
+
+' ============================================================
+' Reports Section - All reports via SaveAsText
+' ============================================================
+
+Private Function BuildAllReportsSection() As String
+    Dim rpt As AccessObject
+    Dim s As String
+
+    s = SectionHeader("REPORTS")
+
+    If CurrentProject.AllReports.Count = 0 Then
+        s = s & "(No reports in database)" & vbCrLf & vbCrLf
+        BuildAllReportsSection = s
+        Exit Function
+    End If
+
+    For Each rpt In CurrentProject.AllReports
+        s = s & "=== REPORT: " & rpt.name & " ===" & vbCrLf
+        s = s & GetSaveAsTextContent(acReport, rpt.name) & vbCrLf & vbCrLf
+    Next
+
+    BuildAllReportsSection = s
+End Function
+
+' ============================================================
+' Code Modules Section - All VBA code
+' ============================================================
+
+Private Function BuildAllCodeModulesSection() As String
+    Dim s As String
+
+    s = SectionHeader("VBA CODE MODULES")
+
+    If Not IsVBEAccessible() Then
+        s = s & "*** VBA PROJECT ACCESS IS DISABLED ***" & vbCrLf
+        s = s & "To include code modules, enable:" & vbCrLf
+        s = s & "  File > Options > Trust Center > Trust Center Settings" & vbCrLf
+        s = s & "  > Macro Settings > Trust access to the VBA project object model" & vbCrLf & vbCrLf
+        BuildAllCodeModulesSection = s
+        Exit Function
+    End If
+
+    On Error GoTo ErrHandler
+
+    Dim vbProj As Object, vbComp As Object
+    Dim content As String, tmp As String, ext As String
+
+    Set vbProj = Application.VBE.ActiveVBProject
+
+    For Each vbComp In vbProj.VBComponents
+        Select Case vbComp.Type
+            Case 1: ext = "Standard Module"
+            Case 2: ext = "Class Module"
+            Case 3: ext = "UserForm"
+            Case 100: ext = "Document Module"
+            Case Else: ext = "Unknown"
+        End Select
+
+        s = s & "=== MODULE: " & vbComp.name & " (" & ext & ") ===" & vbCrLf
+
+        ' Get code directly from CodeModule
+        If vbComp.codeModule.CountOfLines > 0 Then
+            s = s & vbComp.codeModule.lines(1, vbComp.codeModule.CountOfLines) & vbCrLf
+        Else
+            s = s & "(empty)" & vbCrLf
+        End If
+        s = s & vbCrLf
+    Next
+
+    BuildAllCodeModulesSection = s
+    Exit Function
+
+ErrHandler:
+    s = s & "Error exporting modules: " & Err.Number & " - " & Err.Description & vbCrLf & vbCrLf
+    BuildAllCodeModulesSection = s
+End Function
+
+' ============================================================
+' Utility Functions
+' ============================================================
+
+Private Function SectionHeader(ByVal title As String) As String
+    SectionHeader = String(64, "=") & vbCrLf & _
+                    title & vbCrLf & _
+                    String(64, "=") & vbCrLf & vbCrLf
+End Function
+
+Private Function GetDbNameOnly() As String
+    Dim n As String
+    n = CurrentProject.name
+    If InStr(n, ".") > 0 Then n = Left$(n, InStrRev(n, ".") - 1)
+    GetDbNameOnly = n
+End Function
+
+Private Function GetBitness() As String
+    #If Win64 Then
+        GetBitness = "64-bit"
+    #Else
+        GetBitness = "32-bit"
+    #End If
+End Function
+
+Private Function GetWindowsVersion() As String
+    On Error Resume Next
+    Dim wmi As Object, os As Object, item As Object
+    Set wmi = GetObject("winmgmts:\\.\root\CIMV2")
+    Set os = wmi.ExecQuery("SELECT Caption, Version FROM Win32_OperatingSystem")
+    For Each item In os
+        GetWindowsVersion = Trim(item.Caption) & " " & item.Version
+        Exit Function
+    Next
+    GetWindowsVersion = Environ$("OS")
+End Function
+
+Private Function GetUserTableCount() As Long
+    Dim tdf As DAO.TableDef, cnt As Long
+    For Each tdf In CurrentDb.TableDefs
+        If Left$(tdf.name, 4) <> "MSys" And Left$(tdf.name, 1) <> "~" Then
+            cnt = cnt + 1
+        End If
+    Next
+    GetUserTableCount = cnt
+End Function
+
+Private Function GetCodeModuleCount() As Long
+    On Error Resume Next
+    If IsVBEAccessible() Then
+        GetCodeModuleCount = Application.VBE.ActiveVBProject.VBComponents.Count
+    Else
+        GetCodeModuleCount = 0
+    End If
+End Function
+
+Private Sub GetTableCounts(ByRef linkedCount As Long, ByRef localCount As Long)
+    Dim tdf As DAO.TableDef
+    For Each tdf In CurrentDb.TableDefs
+        If Left$(tdf.name, 4) <> "MSys" And Left$(tdf.name, 1) <> "~" Then
+            If Len(tdf.Connect & "") > 0 Then
+                linkedCount = linkedCount + 1
+            Else
+                localCount = localCount + 1
+            End If
+        End If
+    Next
+End Sub
+
+Private Function GetBackendList() As String
+    Dim tdf As DAO.TableDef
+    Dim dict As Object, key As Variant
+    Dim conn As String, s As String
+
+    Set dict = CreateObject("Scripting.Dictionary")
+
+    For Each tdf In CurrentDb.TableDefs
+        If Len(tdf.Connect & "") > 0 Then
+            conn = tdf.Connect
+            If Not dict.Exists(conn) Then dict.Add conn, 1 Else dict(conn) = dict(conn) + 1
+        End If
+    Next
+
+    For Each key In dict.Keys
+        s = s & "  - " & SummarizeConnection(CStr(key)) & " (" & dict(key) & " tables)" & vbCrLf
+    Next
+
+    GetBackendList = s
+End Function
+
+Private Function SummarizeConnection(ByVal conn As String) As String
+    Dim u As String: u = UCase$(conn)
+    If InStr(u, "ODBC;") > 0 Then
+        SummarizeConnection = "ODBC: " & ExtractConnValue(conn, "DATABASE", ExtractConnValue(conn, "DSN", conn))
+    ElseIf InStr(u, "DATABASE=") > 0 Then
+        SummarizeConnection = ExtractConnValue(conn, "DATABASE", conn)
+    Else
+        SummarizeConnection = conn
+    End If
+End Function
+
+Private Function ExtractConnValue(ByVal conn As String, ByVal key As String, ByVal fallback As String) As String
+    Dim parts() As String, i As Long, kv() As String
+    parts = Split(conn, ";")
+    For i = LBound(parts) To UBound(parts)
+        If UCase$(Left$(Trim$(parts(i)), Len(key) + 1)) = UCase$(key & "=") Then
+            kv = Split(parts(i), "=")
+            If UBound(kv) >= 1 Then
+                ExtractConnValue = Trim$(kv(1))
+                Exit Function
+            End If
+        End If
+    Next
+    ExtractConnValue = fallback
+End Function
+
+Private Function GetReferences() As String
+    On Error GoTo ErrHandler
+    Dim ref As Reference, s As String
+    For Each ref In Application.References
+        s = s & "  " & IIf(ref.IsBroken, "[BROKEN] ", "") & ref.name
+        On Error Resume Next
+        s = s & " - " & ref.FullPath
+        On Error GoTo ErrHandler
+        s = s & vbCrLf
+    Next
+    GetReferences = s
+    Exit Function
+ErrHandler:
+    GetReferences = "  (Unable to enumerate references)" & vbCrLf
+End Function
+
+Private Function GetFieldTypeName(ByVal t As Integer) As String
+    Select Case t
+        Case dbBoolean: GetFieldTypeName = "Yes/No"
+        Case dbByte: GetFieldTypeName = "Byte"
+        Case dbInteger: GetFieldTypeName = "Integer"
+        Case dbLong: GetFieldTypeName = "Long"
+        Case dbCurrency: GetFieldTypeName = "Currency"
+        Case dbSingle: GetFieldTypeName = "Single"
+        Case dbDouble: GetFieldTypeName = "Double"
+        Case dbDate: GetFieldTypeName = "Date/Time"
+        Case dbText: GetFieldTypeName = "Text"
+        Case dbLongBinary: GetFieldTypeName = "OLE Object"
+        Case dbMemo: GetFieldTypeName = "Memo"
+        Case dbGUID: GetFieldTypeName = "GUID"
+        Case dbBigInt: GetFieldTypeName = "BigInt"
+        Case dbVarBinary: GetFieldTypeName = "VarBinary"
+        Case dbChar: GetFieldTypeName = "Char"
+        Case dbNumeric: GetFieldTypeName = "Numeric"
+        Case dbDecimal: GetFieldTypeName = "Decimal"
+        Case dbFloat: GetFieldTypeName = "Float"
+        Case dbTime: GetFieldTypeName = "Time"
+        Case dbTimeStamp: GetFieldTypeName = "TimeStamp"
+        Case dbAttachment: GetFieldTypeName = "Attachment"
+        Case dbComplexByte, dbComplexInteger, dbComplexLong, dbComplexSingle, _
+             dbComplexDouble, dbComplexGUID, dbComplexDecimal, dbComplexText
+            GetFieldTypeName = "MultiValue"
+        Case Else: GetFieldTypeName = "Unknown(" & t & ")"
+    End Select
+End Function
+
+Private Function GetQueryTypeName(ByVal t As Integer) As String
+    Select Case t
+        Case 0: GetQueryTypeName = "Select"
+        Case 16: GetQueryTypeName = "Crosstab"
+        Case 32: GetQueryTypeName = "Delete"
+        Case 48: GetQueryTypeName = "Update"
+        Case 64: GetQueryTypeName = "Append"
+        Case 80: GetQueryTypeName = "Make-Table"
+        Case 96: GetQueryTypeName = "Data-Definition"
+        Case 112: GetQueryTypeName = "Pass-Through"
+        Case 128: GetQueryTypeName = "Union"
+        Case Else: GetQueryTypeName = "Unknown(" & t & ")"
+    End Select
+End Function
+
+Private Function GetIndexFields(ByVal idx As DAO.Index) As String
+    Dim fld As DAO.Field, s As String
+    For Each fld In idx.fields
+        s = s & fld.name & ", "
+    Next
+    If Len(s) > 2 Then s = Left$(s, Len(s) - 2)
+    GetIndexFields = s
+End Function
+
+Private Function GetSaveAsTextContent(ByVal objType As AcObjectType, ByVal objName As String) As String
+    On Error GoTo ErrHandler
+    Dim tmp As String, content As String
+
+    tmp = GetTempFolder() & "sav_" & objName & "_" & Format(Now, "yymmddhhnnss") & ".txt"
+
+    Application.SaveAsText objType, objName, tmp
+    content = ReadFile(tmp)
+
+    On Error Resume Next
+    Kill tmp
+    On Error GoTo 0
+
+    GetSaveAsTextContent = content
+    Exit Function
+
+ErrHandler:
+    GetSaveAsTextContent = "(SaveAsText failed: " & Err.Number & " - " & Err.Description & ")"
+End Function
+
+Private Function IsVBEAccessible() As Boolean
+    On Error Resume Next
+    Dim dummy As Long
+    dummy = Application.VBE.ActiveVBProject.VBComponents.Count
+    IsVBEAccessible = (Err.Number = 0)
+End Function
+
+Private Function GetTempFolder() As String
+    On Error Resume Next
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    GetTempFolder = fso.GetSpecialFolder(2).path & "\"
+    If Len(GetTempFolder) = 0 Then GetTempFolder = Environ$("TEMP") & "\"
+    If Len(GetTempFolder) = 1 Then GetTempFolder = CurrentProject.path & "\"
+End Function
+
+Private Function BuildPath(ByVal folder As String, ByVal fileName As String) As String
+    If Right$(folder, 1) <> "\" Then folder = folder & "\"
+    BuildPath = folder & fileName
+End Function
+
+Private Sub EnsureFolder(ByVal folderPath As String)
+    On Error Resume Next
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    If Not fso.FolderExists(folderPath) Then
+        fso.CreateFolder folderPath
+    End If
+End Sub
+
+Private Function ReadFile(ByVal path As String) As String
+    Dim f As Integer, line As String, content As String
+    f = FreeFile
+    Open path For Input As #f
+    Do While Not EOF(f)
+        Line Input #f, line
+        content = content & line & vbCrLf
+    Loop
+    Close #f
+    ReadFile = content
+End Function
+
+Private Sub WriteFile(ByVal path As String, ByVal content As String)
+    Dim f As Integer
+    f = FreeFile
+    Open path For Output As #f
+    Print #f, content
+    Close #f
+End Sub
+
+Private Function ResolveExportFolder(Optional ByVal outputFolder As String = "") As String
+    Dim basePath As String, exportPath As String
+
+    If Len(Trim$(outputFolder)) = 0 Then
+        basePath = CurrentProject.path
+        exportPath = basePath & "\_AI_CONTEXT_" & Format$(Now, "yyyy-mm-dd_hhnnss")
+    Else
+        exportPath = outputFolder
+
+        ' If relative, anchor to current project path
+        If InStr(1, exportPath, ":\", vbTextCompare) = 0 And Left$(exportPath, 2) <> "\\" Then
+            exportPath = CurrentProject.path & "\" & exportPath
+        End If
+    End If
+
+    ResolveExportFolder = exportPath
+End Function
+
+
+--------------------------------------------------------------------------------
+NAME:  basDiag
+TYPE:  StdModule
+LINES: 43
+FILE:  basDiag.bas
+--------------------------------------------------------------------------------
+
+'=== Module: basDiag ===
+Option Compare Database
+Option Explicit
+
+Public Sub Trace(ByVal tag As String)
+    ' Minimal trace—prints timestamp, tag, and Err status to Immediate Window (Ctrl+G)
+    If Err.Number <> 0 Then
+        Debug.Print Format(Now(), "hh:nn:ss"), tag, " Err=" & Err.Number & " " & Err.Description
+    Else
+        Debug.Print Format(Now(), "hh:nn:ss"), tag, " Err=0"
+    End If
+End Sub
+
+Public Sub TempClear(ParamArray names() As Variant)
+    Dim v As Variant
+    On Error Resume Next
+    For Each v In names
+        TempVars.Remove CStr(v)
+    Next v
+    On Error GoTo 0
+End Sub
+
+Public Function TV(ByVal name As String, Optional ByVal defaultValue As Variant) As Variant
+    ' Read TempVar safely; returns defaultValue when missing
+    On Error Resume Next
+    TV = TempVars(name).Value
+    If Err.Number <> 0 Then
+        Err.Clear
+        TV = defaultValue
+    End If
+    On Error GoTo 0
+End Function
+
+Public Sub ClearHandledError(Optional ByVal where As String = "")
+    If Err.Number <> 0 Then
+        Debug.Print "Clearing Err in " & where & ": "; Err.Number; Err.Description
+        Err.Clear
+    End If
+End Sub
+
+
+
+
+
+--------------------------------------------------------------------------------
+NAME:  basDataImport
+TYPE:  StdModule
+LINES: 2
+FILE:  basDataImport.bas
+--------------------------------------------------------------------------------
+Option Compare Database
+
+
+
+--------------------------------------------------------------------------------
+NAME:  basOrderFunctions
+TYPE:  StdModule
+LINES: 153
+FILE:  basOrderFunctions.bas
+--------------------------------------------------------------------------------
+Option Compare Database
+Option Explicit
+
+
+
+Public Function CreateBackorder(ByVal SourceSOID As Long, ByVal BatchID As String) As Long
+    On Error GoTo EH
+
+    Dim db As DAO.Database
+    Dim rsSource As DAO.Recordset
+    Dim rsNew As DAO.Recordset
+    Dim rsEntry As DAO.Recordset
+
+    Dim OrderType As String
+    Dim BaseToken As String
+    Dim SystemLetter As String
+    Dim QualifierCode As String
+    Dim SequenceNo As Long
+    Dim CustomerName As Variant
+    Dim CustomerCode As Variant
+    Dim PONumber As Variant
+    Dim DateReceived As Variant
+
+    Dim maxBackorder As Long
+    Dim newBackorderNo As Long
+    Dim newOrderNumber As String
+    Dim newSOID As Long
+
+    Set db = CurrentDb
+
+    ' Load source order
+    Set rsSource = db.OpenRecordset( _
+        "SELECT * FROM SalesOrders WHERE SOID=" & SourceSOID, _
+        dbOpenSnapshot)
+
+    If rsSource.EOF Then
+        MsgBox "Source order not found.", vbExclamation
+        CreateBackorder = 0
+        GoTo Cleanup
+    End If
+
+    ' Capture source order fields
+    OrderType = Nz(rsSource!OrderType, "")
+    BaseToken = Nz(rsSource!BaseToken, "")
+    SystemLetter = Nz(rsSource!SystemLetter, "")
+    CustomerName = rsSource!CustomerName
+    CustomerCode = rsSource!CustomerCode
+    PONumber = rsSource!PONumber
+    DateReceived = rsSource!DateReceived
+        
+    rsSource.Close
+    Set rsSource = Nothing
+
+    ' Get QualifierCode and SequenceNo from SalesOrderEntry
+    Set rsSource = db.OpenRecordset( _
+        "SELECT QualifierCode, SequenceNo FROM SalesOrderEntry WHERE SOID=" & SourceSOID, _
+        dbOpenSnapshot)
+
+    If rsSource.EOF Then
+        MsgBox "Source order entry not found.", vbExclamation
+        CreateBackorder = 0
+        GoTo Cleanup
+    End If
+
+    QualifierCode = Nz(rsSource!QualifierCode, "")
+    SequenceNo = Nz(rsSource!SequenceNo, 0)
+
+    rsSource.Close
+    Set rsSource = Nothing
+
+    ' Find max BackorderNo for orders with same base pattern
+    ' Match on: OrderType, BaseToken, QualifierCode (from entry), SystemLetter, SequenceNo
+    Dim sql As String
+    sql = "SELECT MAX(SO.BackorderNo) AS MaxBO " & _
+          "FROM SalesOrders AS SO " & _
+          "INNER JOIN SalesOrderEntry AS SE ON SO.SOID = SE.SOID " & _
+          "WHERE SO.OrderType = '" & Replace(OrderType, "'", "''") & "' " & _
+          "AND SO.BaseToken = '" & Replace(BaseToken, "'", "''") & "' " & _
+          "AND SO.SystemLetter = '" & Replace(SystemLetter, "'", "''") & "' " & _
+          "AND SE.QualifierCode = '" & Replace(QualifierCode, "'", "''") & "' " & _
+          "AND SE.SequenceNo = " & SequenceNo & ";"
+
+    Set rsSource = db.OpenRecordset(sql, dbOpenSnapshot)
+
+    maxBackorder = Nz(rsSource!MaxBO, 0)
+    newBackorderNo = maxBackorder + 1
+
+    rsSource.Close
+    Set rsSource = Nothing
+
+    ' Build new order number: BaseToken-QualifierCode+SystemLetter+Seq-BackorderNo
+    newOrderNumber = BaseToken & "-" & _
+                     QualifierCode & SystemLetter & _
+                     Format(SequenceNo, "000") & "-" & _
+                     Format(newBackorderNo, "00")
+
+    ' Create new SalesOrders record
+    Set rsNew = db.OpenRecordset("SalesOrders", dbOpenDynaset, dbSeeChanges)
+    rsNew.AddNew
+        rsNew!OrderType = OrderType
+        rsNew!BaseToken = BaseToken
+        rsNew!SystemLetter = SystemLetter
+        rsNew!BackorderNo = newBackorderNo
+        rsNew!CustomerName = CustomerName
+        rsNew!CustomerCode = CustomerCode
+        rsNew!PONumber = PONumber
+        rsNew!DateReceived = DateReceived
+        rsNew!ActiveFlag = True
+        rsNew!OrderNumber = newOrderNumber
+        rsNew!DateBackorderCreated = Now()
+        rsNew!DateCreated = Now()
+        rsNew!BatchID = BatchID
+    rsNew.Update
+
+    rsNew.Bookmark = rsNew.LastModified
+    newSOID = rsNew!SOID
+    rsNew.Close
+    Set rsNew = Nothing
+
+    ' Create SalesOrderEntry record
+    Set rsEntry = db.OpenRecordset("SalesOrderEntry", dbOpenDynaset, dbSeeChanges)
+    rsEntry.AddNew
+        rsEntry!SOID = newSOID
+        rsEntry!QualifierCode = QualifierCode
+        rsEntry!SequenceNo = SequenceNo
+        rsEntry!IsDeleted = False
+        rsEntry!CreatedOn = Now()
+        rsEntry!OrderNumberDisplay = newOrderNumber
+    rsEntry.Update
+    rsEntry.Close
+    Set rsEntry = Nothing
+
+    CreateBackorder = newSOID
+
+Cleanup:
+    On Error Resume Next
+    If Not rsSource Is Nothing Then rsSource.Close
+    If Not rsNew Is Nothing Then rsNew.Close
+    If Not rsEntry Is Nothing Then rsEntry.Close
+    Set rsSource = Nothing
+    Set rsNew = Nothing
+    Set rsEntry = Nothing
+    Set db = Nothing
+    Exit Function
+
+EH:
+    MsgBox "CreateBackorder error: " & Err.Description, vbExclamation
+    CreateBackorder = 0
+    Resume Cleanup
+End Function
+
+
+
+
+
+--------------------------------------------------------------------------------
+NAME:  basModBackorderDiag
+TYPE:  StdModule
+LINES: 94
+FILE:  basModBackorderDiag.bas
+--------------------------------------------------------------------------------
+'=== Module: modBackorderDiag ===============================================
+
+Public Sub BackorderSizeCheck(SourceSOID As Long, ByVal BatchID As String)
+    Dim db As DAO.Database: Set db = CurrentDb
+    Dim rs As DAO.Recordset
+    Dim OrderType As String, BaseToken As String, SystemLetter As String
+    Dim QualifierCode As String, SequenceNo As Long
+    Dim newOrderNumber As String
+    
+    ' Pull pieces from the same places your CreateBackorder uses
+    Set rs = db.OpenRecordset( _
+        "SELECT OrderType, BaseToken, SystemLetter FROM SalesOrders WHERE SOID=" & SourceSOID, _
+        dbOpenSnapshot)
+    If rs.EOF Then
+        Debug.Print "No SalesOrders row for SOID=" & SourceSOID
+        Exit Sub
+    End If
+    OrderType = Nz(rs!OrderType, "")
+    BaseToken = Nz(rs!BaseToken, "")
+    SystemLetter = Nz(rs!SystemLetter, "")
+    rs.Close
+
+    Set rs = db.OpenRecordset( _
+        "SELECT QualifierCode, SequenceNo FROM SalesOrderEntry WHERE SOID=" & SourceSOID, _
+        dbOpenSnapshot)
+    If rs.EOF Then
+        Debug.Print "No SalesOrderEntry row for SOID=" & SourceSOID
+        Exit Sub
+    End If
+    QualifierCode = Nz(rs!QualifierCode, "")
+    SequenceNo = Nz(rs!SequenceNo, 0)
+    rs.Close
+
+    ' Build the display/order string the same way your function does
+    newOrderNumber = BaseToken & "-" & _
+                     QualifierCode & SystemLetter & _
+                     Format(SequenceNo, "000") & "-" & _
+                     "00"   ' we only care about length here
+
+    Debug.Print String(60, "-")
+    Debug.Print "SourceSOID=" & SourceSOID
+    Debug.Print "newOrderNumber=" & newOrderNumber & " (len=" & Len(newOrderNumber) & ")"
+    Debug.Print "SalesOrders.OrderNumber size:      "; FieldSizeText("SalesOrders", "OrderNumber")
+    Debug.Print "SalesOrderEntry.OrderNumberDisplay:"; FieldSizeText("SalesOrderEntry", "OrderNumberDisplay")
+    Debug.Print "SalesOrders.BatchID size:          "; FieldSizeText("SalesOrders", "BatchID"); _
+                "  | BatchID value len=" & Len(BatchID)
+    Debug.Print "SalesOrders.BackorderNo type/size: "; FieldTypeAndSize("SalesOrders", "BackorderNo")
+End Sub
+
+Private Function FieldSizeText(tbl As String, fld As String) As String
+    On Error GoTo EH
+    Dim f As DAO.Field2
+    Set f = CurrentDb.TableDefs(tbl).fields(fld)
+    If f.Type = dbText Then
+        FieldSizeText = "Text(" & f.Size & ")"
+    ElseIf f.Type = dbMemo Then
+        FieldSizeText = "Long Text"
+    Else
+        FieldSizeText = TypeNameFromDAO(f.Type)
+    End If
+    Exit Function
+EH:
+    FieldSizeText = "<not found>"
+End Function
+
+Private Function FieldTypeAndSize(tbl As String, fld As String) As String
+    On Error GoTo EH
+    Dim f As DAO.Field2
+    Set f = CurrentDb.TableDefs(tbl).fields(fld)
+    Dim s As String
+    s = TypeNameFromDAO(f.Type)
+    If f.Type = dbText Then s = s & "(" & f.Size & ")"
+    FieldTypeAndSize = s
+    Exit Function
+EH:
+    FieldTypeAndSize = "<not found>"
+End Function
+
+Private Function TypeNameFromDAO(t As Integer) As String
+    Select Case t
+        Case dbText: TypeNameFromDAO = "Text"
+        Case dbMemo: TypeNameFromDAO = "Long Text"
+        Case dbByte: TypeNameFromDAO = "Byte"
+        Case dbInteger: TypeNameFromDAO = "Integer"
+        Case dbLong: TypeNameFromDAO = "Long"
+        Case dbSingle: TypeNameFromDAO = "Single"
+        Case dbDouble: TypeNameFromDAO = "Double"
+        Case dbCurrency: TypeNameFromDAO = "Currency"
+        Case dbDate: TypeNameFromDAO = "Date/Time"
+        Case dbBoolean: TypeNameFromDAO = "Yes/No"
+        Case Else: TypeNameFromDAO = "Type=" & t
+    End Select
+End Function
+'=== End module ==============================================================
+
+
+--------------------------------------------------------------------------------
+NAME:  Form_dlgStampBilledDate
+TYPE:  Document(Form/Report)
+LINES: 51
+FILE:  Form_dlgStampBilledDate.cls
+--------------------------------------------------------------------------------
+Option Compare Database
+Option Explicit
+
+Private Sub cmdOK_Click()
+    On Error GoTo EH
+
+    Dim v As Variant
+    v = Nz(Me!txtStampDateInput.Value, Null)
+
+    If IsNull(v) Or Len(Trim$(v & "")) = 0 Then
+        MsgBox "Please enter the billed date from the stamp.", vbExclamation, "Missing Date"
+        Me!txtStampDateInput.SetFocus
+        Exit Sub
+    End If
+
+    ' Accept either a real date value (from picker) or text the user typed
+    If Not IsDate(v) Then
+        MsgBox "That doesn't look like a valid date. Try something like 1/23/2026.", vbExclamation, "Invalid Date"
+        Me!txtStampDateInput.SetFocus
+        Exit Sub
+    End If
+
+    ' Store as an actual Date (no time component)
+    TempVars("StampBilledDate") = DateValue(CDate(v))
+
+    ' Signal success
+    TempVars("StampBilledResult") = "OK"
+
+    DoCmd.Close acForm, Me.name
+    Exit Sub
+
+EH:
+    MsgBox "Error stamping date: " & Err.Description, vbExclamation
+End Sub
+
+Private Sub cmdCancel_Click()
+    TempVars("StampBilledResult") = "Cancel"
+    DoCmd.Close acForm, Me.name
+End Sub
+
+Private Sub Form_Load()
+    ' Default to today's date to reduce typing
+    Me!txtStampDateInput = Date
+
+    ' Clear prior run vars if present
+    On Error Resume Next
+    TempVars.Remove "StampBilledDate"
+    TempVars.Remove "StampBilledResult"
+    On Error GoTo 0
+End Sub
+
+
+
+--------------------------------------------------------------------------------
+NAME:  Form_dlgCancelOrder
+TYPE:  Document(Form/Report)
+LINES: 65
+FILE:  Form_dlgCancelOrder.cls
+--------------------------------------------------------------------------------
+Option Compare Database
+Option Explicit
+
+Private Sub Form_Load()
+    ' Clear prior return vars (ignore if missing)
+    On Error Resume Next
+    TempVars.Remove "CancelResult"
+    TempVars.Remove "CanceledBy"
+    TempVars.Remove "CancelReason"
+    TempVars.Remove "DateCanceled"
+    On Error GoTo 0
+
+    ' Default values
+    Me!txtCanceledBy = Nz(Environ$("USERNAME"), "")
+    Me!txtDateCanceled = Date  ' default to today; user may edit
+End Sub
+
+Private Sub cmdOK_Click()
+    On Error GoTo EH
+
+    Dim sBy As String
+    Dim sReason As String
+    Dim vDate As Variant
+
+    sBy = Trim$(Nz(Me!txtCanceledBy.Value, ""))
+    sReason = Trim$(Nz(Me!txtCancelReason.Value, "")) ' Short Text in table, still validate
+
+    If Len(sBy) = 0 Then
+        MsgBox "Please enter your name for Canceled By.", vbExclamation, "Missing Name"
+        Me!txtCanceledBy.SetFocus
+        Exit Sub
+    End If
+
+    If Len(sReason) = 0 Then
+        MsgBox "Please enter a reason for cancellation.", vbExclamation, "Missing Reason"
+        Me!txtCancelReason.SetFocus
+        Exit Sub
+    End If
+
+    vDate = Nz(Me!txtDateCanceled.Value, Date)
+
+    If Not IsDate(vDate) Then
+        MsgBox "Please enter a valid canceled date (e.g., 1/23/2026).", vbExclamation, "Invalid Date"
+        Me!txtDateCanceled.SetFocus
+        Exit Sub
+    End If
+
+    ' Return values via TempVars
+    TempVars("CancelResult") = "OK"
+    TempVars("CanceledBy") = sBy
+    TempVars("CancelReason") = sReason
+    TempVars("DateCanceled") = DateValue(CDate(vDate)) ' date-only
+    
+
+    DoCmd.Close acForm, Me.name
+    Exit Sub
+
+EH:
+    MsgBox "Cancel dialog error: " & Err.Number & " - " & Err.Description, vbExclamation
+End Sub
+
+Private Sub cmdCancel_Click()
+    TempVars("CancelResult") = "Cancel"
+    DoCmd.Close acForm, Me.name
+End Sub
+
+
+--------------------------------------------------------------------------------
+NAME:  basContextLite
+TYPE:  StdModule
+LINES: 424
+FILE:  basContextLite.bas
+--------------------------------------------------------------------------------
+'Attribute VB_Name = "modAI_ContextLite"
+Option Compare Database
+Option Explicit
+
+' ============================================================
+' AI Context Lite - Streamlined export for AI assistants
+' Produces ~1000-1500 lines vs 8000+ from full export
+'
+' Entry point:
+'   Call ExportContextLite
+'   Call ExportContextLite "C:\MyFolder"
+' ============================================================
+
+Public Sub ExportContextLite(Optional ByVal outputFolder As String = "")
+    On Error GoTo ErrHandler
+
+    If Len(outputFolder) = 0 Then outputFolder = CurrentProject.path
+
+    Dim report As String, outFile As String
+    outFile = BuildPath(outputFolder, "ContextLite_" & Format(Now, "yyyymmdd") & ".txt")
+
+    report = BuildHeader()
+    report = report & BuildTableSection()
+    report = report & BuildRelationshipsSection()
+    report = report & BuildQueriesSection()
+    report = report & BuildFormsLite()
+    report = report & BuildVBASignatures()
+    report = report & BuildDeprecationHints()
+
+    WriteFile outFile, report
+    MsgBox "Exported to:" & vbCrLf & outFile, vbInformation, "Context Lite"
+    Exit Sub
+
+ErrHandler:
+    MsgBox "Export failed: " & Err.Description, vbCritical
+End Sub
+
+' ============================================================
+' Header - Quick stats
+' ============================================================
+
+Private Function BuildHeader() As String
+    Dim s As String
+    s = "# AI CONTEXT LITE - " & CurrentProject.name & vbCrLf
+    s = s & "Generated: " & Now & vbCrLf
+    s = s & "Tables: " & GetUserTableCount() & " | "
+    s = s & "Queries: " & CurrentData.AllQueries.Count & " | "
+    s = s & "Forms: " & CurrentProject.AllForms.Count & " | "
+    s = s & "Modules: " & GetModuleCount() & vbCrLf
+    s = s & String(60, "-") & vbCrLf & vbCrLf
+    BuildHeader = s
+End Function
+
+' ============================================================
+' Tables - Schema with row counts, compact format
+' ============================================================
+
+Private Function BuildTableSection() As String
+    Dim db As DAO.Database: Set db = CurrentDb
+    Dim tdf As DAO.TableDef, fld As DAO.Field, idx As DAO.Index
+    Dim s As String, flds As String, pk As String, rowCount As Long
+
+    s = "## TABLES" & vbCrLf & vbCrLf
+
+    For Each tdf In db.TableDefs
+        If Left$(tdf.name, 4) <> "MSys" And Left$(tdf.name, 1) <> "~" Then
+            ' Row count
+            On Error Resume Next
+            rowCount = DCount("*", tdf.name)
+            If Err.Number <> 0 Then rowCount = -1
+            On Error GoTo 0
+
+            s = s & "### " & tdf.name & " (" & rowCount & " rows)"
+            If Len(tdf.Connect) > 0 Then s = s & " [LINKED]"
+            s = s & vbCrLf
+
+            ' Fields - compact list
+            flds = ""
+            For Each fld In tdf.fields
+                flds = flds & "  " & fld.name & ": " & GetTypeName(fld.Type)
+                If fld.Type = dbText And fld.Size < 255 Then flds = flds & "(" & fld.Size & ")"
+                If fld.Required Then flds = flds & " NOT NULL"
+                If Len(fld.defaultValue) > 0 Then flds = flds & " DEFAULT " & fld.defaultValue
+                flds = flds & vbCrLf
+            Next
+            s = s & flds
+
+            ' Primary key only
+            pk = ""
+            For Each idx In tdf.Indexes
+                If idx.Primary Then
+                    pk = GetIdxFields(idx)
+                    Exit For
+                End If
+            Next
+            If Len(pk) > 0 Then s = s & "  PK: " & pk & vbCrLf
+
+            s = s & vbCrLf
+        End If
+    Next
+
+    BuildTableSection = s
+End Function
+
+' ============================================================
+' Relationships - Compact format
+' ============================================================
+
+Private Function BuildRelationshipsSection() As String
+    Dim db As DAO.Database: Set db = CurrentDb
+    Dim rel As DAO.Relation, fld As DAO.Field
+    Dim s As String, attrs As String
+
+    s = "## RELATIONSHIPS" & vbCrLf & vbCrLf
+
+    If db.Relations.Count = 0 Then
+        s = s & "(none)" & vbCrLf & vbCrLf
+        BuildRelationshipsSection = s
+        Exit Function
+    End If
+
+    For Each rel In db.Relations
+        s = s & rel.Table & "." & rel.fields(0).name & " -> "
+        s = s & rel.ForeignTable & "." & rel.fields(0).ForeignName
+
+        ' Attributes inline
+        If (rel.Attributes And dbRelationDontEnforce) = 0 Then
+            s = s & " [Enforced"
+            If (rel.Attributes And dbRelationUpdateCascade) <> 0 Then s = s & ", CascadeUpdate"
+            If (rel.Attributes And dbRelationDeleteCascade) <> 0 Then s = s & ", CascadeDelete"
+            s = s & "]"
+        End If
+        s = s & vbCrLf
+    Next
+
+    s = s & vbCrLf
+    BuildRelationshipsSection = s
+End Function
+
+' ============================================================
+' Queries - SQL only
+' ============================================================
+
+Private Function BuildQueriesSection() As String
+    Dim db As DAO.Database: Set db = CurrentDb
+    Dim qdf As DAO.QueryDef
+    Dim s As String
+
+    s = "## QUERIES" & vbCrLf & vbCrLf
+
+    For Each qdf In db.QueryDefs
+        If Left$(qdf.name, 1) <> "~" Then
+            s = s & "### " & qdf.name & vbCrLf
+            s = s & "```sql" & vbCrLf
+            s = s & Trim$(qdf.sql) & vbCrLf
+            s = s & "```" & vbCrLf & vbCrLf
+        End If
+    Next
+
+    BuildQueriesSection = s
+End Function
+
+' ============================================================
+' Forms Lite - Just RecordSource and control bindings
+' ============================================================
+
+Private Function BuildFormsLite() As String
+    Dim frm As AccessObject
+    Dim s As String
+
+    s = "## FORMS" & vbCrLf & vbCrLf
+
+    For Each frm In CurrentProject.AllForms
+        s = s & GetFormSummary(frm.name)
+    Next
+
+    BuildFormsLite = s
+End Function
+
+Private Function GetFormSummary(ByVal frmName As String) As String
+    On Error GoTo ErrHandler
+
+    Dim s As String, ctl As Control
+    Dim wasOpen As Boolean, src As String
+
+    wasOpen = (SysCmd(acSysCmdGetObjectState, acForm, frmName) <> 0)
+    If Not wasOpen Then DoCmd.OpenForm frmName, acDesign, , , , acHidden
+
+    s = "### " & frmName & vbCrLf
+
+    ' RecordSource
+    src = Nz(forms(frmName).RecordSource, "(unbound)")
+    s = s & "RecordSource: " & src & vbCrLf
+
+    ' Bound controls only
+    s = s & "Controls:" & vbCrLf
+    For Each ctl In forms(frmName).Controls
+        On Error Resume Next
+        If Len(ctl.ControlSource) > 0 Then
+            s = s & "  " & ctl.name & " <- " & ctl.ControlSource & vbCrLf
+        End If
+        On Error GoTo ErrHandler
+    Next
+
+    ' Check for code behind
+    If HasFormCode(frmName) Then
+        s = s & "HasCode: Yes" & vbCrLf
+    End If
+
+    If Not wasOpen Then DoCmd.Close acForm, frmName, acSaveNo
+
+    s = s & vbCrLf
+    GetFormSummary = s
+    Exit Function
+
+ErrHandler:
+    If Not wasOpen Then
+        On Error Resume Next
+        DoCmd.Close acForm, frmName, acSaveNo
+    End If
+    GetFormSummary = "### " & frmName & " (error reading)" & vbCrLf & vbCrLf
+End Function
+
+Private Function HasFormCode(ByVal frmName As String) As Boolean
+    On Error Resume Next
+    Dim lineCount As Long
+    lineCount = Application.VBE.ActiveVBProject.VBComponents("Form_" & frmName).codeModule.CountOfLines
+    HasFormCode = (lineCount > 2)  ' More than just Option Compare/Explicit
+End Function
+
+' ============================================================
+' VBA Signatures - Public Subs/Functions only
+' ============================================================
+
+Private Function BuildVBASignatures() As String
+    Dim s As String
+
+    s = "## VBA PUBLIC INTERFACE" & vbCrLf & vbCrLf
+
+    If Not IsVBEAccessible() Then
+        s = s & "(VBA project access disabled - enable in Trust Center)" & vbCrLf & vbCrLf
+        BuildVBASignatures = s
+        Exit Function
+    End If
+
+    On Error GoTo ErrHandler
+
+    Dim vbComp As Object, codeMod As Object
+    Dim i As Long, lineText As String, inProc As Boolean
+    Dim modType As String
+
+    For Each vbComp In Application.VBE.ActiveVBProject.VBComponents
+        ' Skip form/report modules - already covered
+        If vbComp.Type = 1 Then  ' Standard module only
+            Set codeMod = vbComp.codeModule
+
+            If codeMod.CountOfLines > 0 Then
+                s = s & "### " & vbComp.name & vbCrLf
+
+                For i = 1 To codeMod.CountOfLines
+                    lineText = Trim$(codeMod.lines(i, 1))
+
+                    ' Public Sub/Function declarations
+                    If StartsWith(lineText, "Public Sub ") Or _
+                       StartsWith(lineText, "Public Function ") Or _
+                       StartsWith(lineText, "Sub ") Or _
+                       StartsWith(lineText, "Function ") Then
+
+                        ' Get full signature (may span lines with _)
+                        Dim sig As String: sig = lineText
+                        Do While Right$(Trim$(sig), 1) = "_" And i < codeMod.CountOfLines
+                            i = i + 1
+                            sig = Left$(sig, Len(sig) - 1) & " " & Trim$(codeMod.lines(i, 1))
+                        Loop
+
+                        s = s & "  " & sig & vbCrLf
+                    End If
+                Next
+
+                s = s & vbCrLf
+            End If
+        End If
+    Next
+
+    BuildVBASignatures = s
+    Exit Function
+
+ErrHandler:
+    s = s & "(Error reading VBA: " & Err.Description & ")" & vbCrLf & vbCrLf
+    BuildVBASignatures = s
+End Function
+
+' ============================================================
+' Deprecation Hints - Empty tables, orphaned objects
+' ============================================================
+
+Private Function BuildDeprecationHints() As String
+    Dim db As DAO.Database: Set db = CurrentDb
+    Dim tdf As DAO.TableDef
+    Dim s As String, rowCount As Long
+    Dim emptyTables As String, unusedCount As Long
+
+    s = "## DEPRECATION HINTS" & vbCrLf & vbCrLf
+
+    ' Empty tables
+    s = s & "### Empty Tables (0 rows)" & vbCrLf
+    For Each tdf In db.TableDefs
+        If Left$(tdf.name, 4) <> "MSys" And Left$(tdf.name, 1) <> "~" Then
+            On Error Resume Next
+            rowCount = DCount("*", tdf.name)
+            If Err.Number = 0 And rowCount = 0 Then
+                s = s & "  - " & tdf.name & vbCrLf
+                unusedCount = unusedCount + 1
+            End If
+            On Error GoTo 0
+        End If
+    Next
+    If unusedCount = 0 Then s = s & "  (none)" & vbCrLf
+
+    s = s & vbCrLf
+
+    ' Tables with tmp/Import prefix (likely temporary)
+    s = s & "### Likely Temporary Tables" & vbCrLf
+    unusedCount = 0
+    For Each tdf In db.TableDefs
+        If Left$(tdf.name, 3) = "tmp" Or Left$(tdf.name, 3) = "tbl" & "Import" Or _
+           Left$(tdf.name, 6) = "Import" Then
+            s = s & "  - " & tdf.name & vbCrLf
+            unusedCount = unusedCount + 1
+        End If
+    Next
+    If unusedCount = 0 Then s = s & "  (none)" & vbCrLf
+
+    s = s & vbCrLf
+
+    ' Tables not referenced in any query
+    s = s & "### Tables Not in Queries" & vbCrLf
+    Dim allSQL As String, qdf As DAO.QueryDef
+    For Each qdf In db.QueryDefs
+        allSQL = allSQL & " " & UCase$(qdf.sql) & " "
+    Next
+
+    unusedCount = 0
+    For Each tdf In db.TableDefs
+        If Left$(tdf.name, 4) <> "MSys" And Left$(tdf.name, 1) <> "~" Then
+            If InStr(allSQL, UCase$(tdf.name)) = 0 Then
+                s = s & "  - " & tdf.name & vbCrLf
+                unusedCount = unusedCount + 1
+            End If
+        End If
+    Next
+    If unusedCount = 0 Then s = s & "  (none)" & vbCrLf
+
+    s = s & vbCrLf
+    BuildDeprecationHints = s
+End Function
+
+' ============================================================
+' Utilities
+' ============================================================
+
+Private Function GetUserTableCount() As Long
+    Dim tdf As DAO.TableDef, cnt As Long
+    For Each tdf In CurrentDb.TableDefs
+        If Left$(tdf.name, 4) <> "MSys" And Left$(tdf.name, 1) <> "~" Then cnt = cnt + 1
+    Next
+    GetUserTableCount = cnt
+End Function
+
+Private Function GetModuleCount() As Long
+    On Error Resume Next
+    If IsVBEAccessible() Then
+        GetModuleCount = Application.VBE.ActiveVBProject.VBComponents.Count
+    End If
+End Function
+
+Private Function GetTypeName(ByVal t As Integer) As String
+    Select Case t
+        Case dbBoolean: GetTypeName = "Yes/No"
+        Case dbByte: GetTypeName = "Byte"
+        Case dbInteger: GetTypeName = "Integer"
+        Case dbLong: GetTypeName = "Long"
+        Case dbCurrency: GetTypeName = "Currency"
+        Case dbSingle: GetTypeName = "Single"
+        Case dbDouble: GetTypeName = "Double"
+        Case dbDate: GetTypeName = "Date/Time"
+        Case dbText: GetTypeName = "Text"
+        Case dbMemo: GetTypeName = "Memo"
+        Case dbGUID: GetTypeName = "GUID"
+        Case Else: GetTypeName = "Type" & t
+    End Select
+End Function
+
+Private Function GetIdxFields(ByVal idx As DAO.Index) As String
+    Dim fld As DAO.Field, s As String
+    For Each fld In idx.fields
+        s = s & fld.name & ", "
+    Next
+    If Len(s) > 2 Then s = Left$(s, Len(s) - 2)
+    GetIdxFields = s
+End Function
+
+Private Function IsVBEAccessible() As Boolean
+    On Error Resume Next
+    Dim dummy As Long
+    dummy = Application.VBE.ActiveVBProject.VBComponents.Count
+    IsVBEAccessible = (Err.Number = 0)
+End Function
+
+Private Function StartsWith(ByVal str As String, ByVal prefix As String) As Boolean
+    StartsWith = (Left$(str, Len(prefix)) = prefix)
+End Function
+
+Private Function BuildPath(ByVal folder As String, ByVal fileName As String) As String
+    If Right$(folder, 1) <> "\" Then folder = folder & "\"
+    BuildPath = folder & fileName
+End Function
+
+Private Sub WriteFile(ByVal path As String, ByVal content As String)
+    Dim f As Integer: f = FreeFile
+    Open path For Output As #f
+    Print #f, content
+    Close #f
+End Sub
+
+
+--------------------------------------------------------------------------------
+NAME:  basTableDeprecateAnalysis
+TYPE:  StdModule
+LINES: 83
+FILE:  basTableDeprecateAnalysis.bas
+--------------------------------------------------------------------------------
+Public Sub AnalyzeTableUsage(tableName As String)
+    ' Comprehensive check for table references
+    Dim db As DAO.Database
+    Dim qdf As DAO.QueryDef
+    Dim frm As AccessObject
+    Dim rpt As AccessObject
+    Dim foundIn As String
+    
+    Set db = CurrentDb
+    foundIn = ""
+    
+    Debug.Print "=== Analyzing Table: " & tableName & " ==="
+    Debug.Print ""
+    
+    ' Check queries
+    For Each qdf In db.QueryDefs
+        If InStr(1, qdf.sql, tableName, vbTextCompare) > 0 Then
+            foundIn = foundIn & "QUERY: " & qdf.name & vbCrLf
+        End If
+    Next
+    
+    ' Check forms
+    For Each frm In CurrentProject.AllForms
+        DoCmd.OpenForm frm.name, acDesign, , , , acHidden
+        If InStr(1, forms(frm.name).RecordSource, tableName, vbTextCompare) > 0 Then
+            foundIn = foundIn & "FORM RecordSource: " & frm.name & vbCrLf
+        End If
+        DoCmd.Close acForm, frm.name, acSaveNo
+    Next
+    
+    ' Check reports
+    For Each rpt In CurrentProject.AllReports
+        DoCmd.OpenReport rpt.name, acViewDesign
+        If InStr(1, Reports(rpt.name).RecordSource, tableName, vbTextCompare) > 0 Then
+            foundIn = foundIn & "REPORT RecordSource: " & rpt.name & vbCrLf
+        End If
+        DoCmd.Close acReport, rpt.name, acSaveNo
+    Next
+    
+    ' Output results
+    If foundIn = "" Then
+        Debug.Print "? Table '" & tableName & "' is NOT referenced anywhere"
+        Debug.Print "SAFE TO REMOVE"
+    Else
+        Debug.Print "? Table '" & tableName & "' IS USED IN:"
+        Debug.Print foundIn
+        Debug.Print "DO NOT REMOVE"
+    End If
+    
+    Debug.Print ""
+    Debug.Print "=== Analysis Complete ==="
+End Sub
+
+Public Sub CheckTableRelationships(tableName As String)
+    ' Shows all relationships involving a table
+    Dim db As DAO.Database
+    Dim rel As DAO.Relation
+    Dim foundRels As Boolean
+    
+    Set db = CurrentDb
+    foundRels = False
+    
+    Debug.Print "=== Relationships for: " & tableName & " ==="
+    Debug.Print ""
+    
+    For Each rel In db.Relations
+        If rel.Table = tableName Or rel.ForeignTable = tableName Then
+            Debug.Print "Relationship: " & rel.name
+            Debug.Print "  From: " & rel.Table & " ? To: " & rel.ForeignTable
+            Debug.Print "  Attributes: " & rel.Attributes
+            Debug.Print ""
+            foundRels = True
+        End If
+    Next
+    
+    If Not foundRels Then
+        Debug.Print "? No relationships found"
+        Debug.Print "SAFE TO REMOVE"
+    End If
+    
+    Debug.Print "=== Check Complete ==="
+End Sub
+
+
+
+--------------------------------------------------------------------------------
+NAME:  basTestFunctions
+TYPE:  StdModule
+LINES: 315
+FILE:  basTestFunctions.bas
+--------------------------------------------------------------------------------
+Option Compare Database
+Option Explicit
+
+' Test results tracking
+Private TestResults As Collection
+
+Public Sub RunAllCleanupTests()
+    ' Master test suite - run before and after cleanup
+    Dim startTime As Double
+    Dim passCount As Long
+    Dim failCount As Long
+    Dim i As Long
+    
+    startTime = Timer
+    Set TestResults = New Collection
+    
+    Debug.Print "========================================="
+    Debug.Print "DATABASE CLEANUP TEST SUITE"
+    Debug.Print "Started: " & Now
+    Debug.Print "========================================="
+    Debug.Print ""
+    
+    ' Run all tests
+    Call TestCoreTablesExist
+    Call TestRelationshipsIntact
+    Call TestOrderCreationWorkflow
+    Call TestSequenceAllocation
+    Call TestBatchCreation
+    Call TestOrderListQuery
+    Call TestFormRecordSources
+    
+    ' Summarize results
+    Debug.Print ""
+    Debug.Print "========================================="
+    Debug.Print "TEST SUMMARY"
+    Debug.Print "========================================="
+    
+    For i = 1 To TestResults.Count
+        If TestResults(i) = "PASS" Then
+            passCount = passCount + 1
+        Else
+            failCount = failCount + 1
+        End If
+    Next
+    
+    Debug.Print "Total Tests: " & TestResults.Count
+    Debug.Print "Passed: " & passCount
+    Debug.Print "Failed: " & failCount
+    Debug.Print "Duration: " & Format(Timer - startTime, "0.00") & " seconds"
+    Debug.Print ""
+    
+    If failCount = 0 Then
+        Debug.Print "? ALL TESTS PASSED - Safe to proceed"
+    Else
+        Debug.Print "? TESTS FAILED - DO NOT PROCEED with cleanup"
+    End If
+    
+    Debug.Print "========================================="
+End Sub
+
+Private Sub LogTest(testName As String, result As String, Optional details As String = "")
+    Debug.Print testName & ": " & result
+    If details <> "" Then Debug.Print "  ? " & details
+    TestResults.Add result
+End Sub
+
+Private Sub TestCoreTablesExist()
+    ' Verify critical tables exist
+    Dim db As DAO.Database
+    Dim coreTables As Variant
+    Dim i As Long
+    Dim allExist As Boolean
+    
+    Set db = CurrentDb
+    coreTables = Array("SalesOrders", "SalesOrderEntry", "OrderSeq", _
+                       "QualifierType", "Customers", "Projects", "SystemLetter")
+    
+    allExist = True
+    
+    For i = LBound(coreTables) To UBound(coreTables)
+        On Error Resume Next
+        Dim tbl As DAO.TableDef
+        Set tbl = db.TableDefs(coreTables(i))
+        
+        If Err.Number <> 0 Then
+            LogTest "TestCoreTablesExist", "FAIL", "Missing table: " & coreTables(i)
+            allExist = False
+            Exit Sub
+        End If
+        On Error GoTo 0
+    Next
+    
+    If allExist Then
+        LogTest "TestCoreTablesExist", "PASS", "All 7 core tables present"
+    End If
+End Sub
+
+Private Sub TestRelationshipsIntact()
+    ' Verify critical relationships exist
+    Dim db As DAO.Database
+    Dim rel As DAO.Relation
+    Dim criticalRels As Long
+    
+    Set db = CurrentDb
+    criticalRels = 0
+    
+    ' Count expected relationships
+    For Each rel In db.Relations
+        If (rel.Table = "SalesOrders" And rel.ForeignTable = "SalesOrderEntry") Or _
+           (rel.Table = "SystemLetter" And rel.ForeignTable = "SalesOrders") Then
+            criticalRels = criticalRels + 1
+        End If
+    Next
+    
+    If criticalRels >= 2 Then
+        LogTest "TestRelationshipsIntact", "PASS", criticalRels & " critical relationships verified"
+    Else
+        LogTest "TestRelationshipsIntact", "FAIL", "Expected 2+ relationships, found " & criticalRels
+    End If
+End Sub
+
+Private Sub TestOrderCreationWorkflow()
+    ' Verify we can create a test order
+    Dim db As DAO.Database
+    Dim rs As DAO.Recordset
+    Dim testSOID As Long
+    
+    On Error GoTo TestFailed
+    
+    Set db = CurrentDb
+    Set rs = db.OpenRecordset("SalesOrders", dbOpenDynaset)
+    
+    ' Create test order
+    rs.AddNew
+    rs!OrderType = "SALES"
+    rs!BaseToken = "999999"
+    rs!SystemLetter = "N"
+    rs!CustomerName = "TEST CUSTOMER"
+    rs!PONumber = "TEST-CLEANUP"
+    rs!DateReceived = Date
+    rs!ActiveFlag = True
+    rs.Update
+    
+    ' Get the ID
+    rs.Bookmark = rs.LastModified
+    testSOID = rs!SOID
+    rs.Close
+    
+    ' Clean up test order
+    db.Execute "DELETE FROM SalesOrders WHERE SOID = " & testSOID, dbFailOnError
+    
+    LogTest "TestOrderCreationWorkflow", "PASS", "Test order created and deleted successfully"
+    Exit Sub
+    
+TestFailed:
+    LogTest "TestOrderCreationWorkflow", "FAIL", Err.Description
+End Sub
+
+Private Sub TestSequenceAllocation()
+    ' Verify sequence allocation works
+    Dim seq As Long
+    
+    On Error GoTo TestFailed
+    
+    ' This assumes basSeqAllocator exists
+    seq = ReserveSeq("TEST", "999999", "XX", "N", True)  ' Preview mode
+    
+    If seq > 0 Then
+        LogTest "TestSequenceAllocation", "PASS", "Reserved sequence: " & seq
+    Else
+        LogTest "TestSequenceAllocation", "FAIL", "Sequence allocation returned 0"
+    End If
+    Exit Sub
+    
+TestFailed:
+    LogTest "TestSequenceAllocation", "FAIL", Err.Description
+End Sub
+
+Private Sub TestBatchCreation()
+    ' Verify batch wizard functions exist
+    On Error GoTo TestFailed
+    
+    ' Better way: Check if the module exists
+    Dim modExists As Boolean
+    modExists = ModuleExists("basBatchWizard")
+    
+    If modExists Then
+        ' Module exists, now check if it has the CommitBatch function
+        ' We'll check by looking at the module's code
+        Dim hasFunction As Boolean
+        hasFunction = ModuleHasFunction("basBatchWizard", "CommitBatch")
+        
+        If hasFunction Then
+            LogTest "TestBatchCreation", "PASS", "Batch wizard module and CommitBatch function found"
+        Else
+            LogTest "TestBatchCreation", "FAIL", "basBatchWizard exists but CommitBatch function not found"
+        End If
+    Else
+        LogTest "TestBatchCreation", "FAIL", "basBatchWizard module not found"
+    End If
+    Exit Sub
+    
+TestFailed:
+    LogTest "TestBatchCreation", "FAIL", Err.Description
+End Sub
+
+Private Function ModuleExists(moduleName As String) As Boolean
+    ' Check if a VBA module exists
+    Dim i As Long
+    
+    On Error Resume Next
+    
+    ' Check standard modules
+    For i = 1 To Application.VBE.ActiveVBProject.VBComponents.Count
+        If Application.VBE.ActiveVBProject.VBComponents(i).name = moduleName Then
+            ModuleExists = True
+            Exit Function
+        End If
+    Next
+    
+    ModuleExists = False
+    On Error GoTo 0
+End Function
+
+Private Function ModuleHasFunction(moduleName As String, functionName As String) As Boolean
+    ' Check if a module contains a specific function
+    Dim vbc As Object  ' VBComponent
+    Dim codeModule As Object
+    Dim i As Long
+    Dim lineText As String
+    
+    On Error Resume Next
+    
+    ' Get the module
+    Set vbc = Application.VBE.ActiveVBProject.VBComponents(moduleName)
+    
+    If vbc Is Nothing Then
+        ModuleHasFunction = False
+        Exit Function
+    End If
+    
+    Set codeModule = vbc.codeModule
+    
+    ' Search for function declaration
+    For i = 1 To codeModule.CountOfLines
+        lineText = codeModule.lines(i, 1)
+        
+        ' Check for function/sub declaration
+        If InStr(1, lineText, "Function " & functionName, vbTextCompare) > 0 Or _
+           InStr(1, lineText, "Sub " & functionName, vbTextCompare) > 0 Then
+            ModuleHasFunction = True
+            Exit Function
+        End If
+    Next
+    
+    ModuleHasFunction = False
+    On Error GoTo 0
+End Function
+
+Private Sub TestOrderListQuery()
+    ' Verify main queries work
+    Dim db As DAO.Database
+    Dim qdf As DAO.QueryDef
+    Dim rs As DAO.Recordset
+    
+    On Error GoTo TestFailed
+    
+    Set db = CurrentDb
+    Set qdf = db.QueryDefs("qryOrderList_Base")
+    Set rs = qdf.OpenRecordset(dbOpenSnapshot)
+    
+    ' Query should execute without error
+    rs.Close
+    
+    LogTest "TestOrderListQuery", "PASS", "Order list query executes successfully"
+    Exit Sub
+    
+TestFailed:
+    LogTest "TestOrderListQuery", "FAIL", Err.Description
+End Sub
+
+Private Sub TestFormRecordSources()
+    ' Verify critical forms can open
+    Dim forms As Variant
+    Dim i As Long
+    Dim allOpen As Boolean
+    
+    On Error GoTo TestFailed
+    
+    forms = Array("frmOrderList", "dlgNewOrderType", "dlgBatchGenerateOrders")
+    allOpen = True
+    
+    For i = LBound(forms) To UBound(forms)
+        DoCmd.OpenForm forms(i), acDesign, , , , acHidden
+        DoCmd.Close acForm, forms(i), acSaveNo
+    Next
+    
+    LogTest "TestFormRecordSources", "PASS", "All critical forms open without errors"
+    Exit Sub
+    
+TestFailed:
+    LogTest "TestFormRecordSources", "FAIL", Err.Description
+    On Error Resume Next
+    DoCmd.Close acForm, "", acSaveNo
+End Sub
+
+Private Function FunctionExists(moduleName As String, functionName As String) As Boolean
+    ' Check if a VBA function exists
+    On Error Resume Next
+    Dim result As Variant
+    result = Eval(functionName & "()")
+    FunctionExists = (Err.Number = 0 Or Err.Number = 450)  ' 450 = wrong number of arguments (function exists)
+    On Error GoTo 0
+End Function
+
+
+
+--------------------------------------------------------------------------------
+NAME:  basCleanImportErrors
+TYPE:  StdModule
+LINES: 26
+FILE:  basCleanImportErrors.bas
+--------------------------------------------------------------------------------
+Public Sub CleanupImportErrors()
+    ' Removes all import error tables
+    Dim db As DAO.Database
+    Dim tdf As DAO.TableDef
+    Dim deletedCount As Long
+    
+    Set db = CurrentDb
+    deletedCount = 0
+    
+    For Each tdf In db.TableDefs
+        ' Import error tables end with "_ImportErrors"
+        If Right(tdf.name, 13) = "_ImportErrors" Then
+            On Error Resume Next
+            db.TableDefs.Delete tdf.name
+            If Err.Number = 0 Then
+                Debug.Print "Deleted import error table: " & tdf.name
+                deletedCount = deletedCount + 1
+            End If
+            On Error GoTo 0
+        End If
+    Next
+    
+    Debug.Print ""
+    Debug.Print "Cleanup complete: " & deletedCount & " import error table(s) removed"
+End Sub
+
+
+
+--------------------------------------------------------------------------------
+NAME:  basAuditLogging
+TYPE:  StdModule
+LINES: 73
+FILE:  basAuditLogging.bas
+--------------------------------------------------------------------------------
+Option Compare Database
+Option Explicit
+
+Public Sub LogAudit( _
+    ByVal tableName As String, _
+    ByVal recordID As Long, _
+    ByVal action As String, _
+    Optional ByVal fieldName As String = "", _
+    Optional ByVal oldValue As String = "", _
+    Optional ByVal newValue As String = "", _
+    Optional ByVal notes As String = "" _
+)
+    ' General-purpose audit logging
+    Dim db As DAO.Database
+    Dim rs As DAO.Recordset
+    
+    On Error Resume Next  ' Don't crash app if logging fails
+    
+    Set db = CurrentDb
+    Set rs = db.OpenRecordset("tblAuditLog", dbOpenDynaset)
+    
+    rs.AddNew
+    rs!AuditTimestamp = Now
+    rs!tableName = tableName
+    rs!recordID = recordID
+    rs!action = action
+    rs!fieldName = fieldName
+    rs!oldValue = Left(oldValue, 255)  ' Truncate to field size
+    rs!newValue = Left(newValue, 255)
+    rs!UserName = Environ("USERNAME")
+    rs!ComputerName = Environ("COMPUTERNAME")
+    rs!notes = notes
+    rs.Update
+    
+    rs.Close
+    
+    ' Silently ignore errors
+    On Error GoTo 0
+End Sub
+
+Public Sub LogOrderAction( _
+    ByVal SOID As Long, _
+    ByVal OrderNumber As String, _
+    ByVal action As String, _
+    Optional ByVal oldStatus As String = "", _
+    Optional ByVal newStatus As String = "", _
+    Optional ByVal reason As String = "" _
+)
+    ' Order-specific audit logging
+    Dim db As DAO.Database
+    Dim rs As DAO.Recordset
+    
+    On Error Resume Next
+    
+    Set db = CurrentDb
+    Set rs = db.OpenRecordset("tblOrderAudit", dbOpenDynaset)
+    
+    rs.AddNew
+    rs!SOID = SOID
+    rs!OrderNumber = OrderNumber
+    rs!action = action
+    rs!ActionTimestamp = Now
+    rs!ActionBy = Environ("USERNAME")
+    rs!ComputerName = Environ("COMPUTERNAME")
+    rs!oldStatus = oldStatus
+    rs!newStatus = newStatus
+    rs!reason = reason
+    rs.Update
+    
+    rs.Close
+    
+    On Error GoTo 0
+End Sub
+
+
+--------------------------------------------------------------------------------
+NAME:  basVBADumpALL
+TYPE:  StdModule
+LINES: 174
+FILE:  basVBADumpALL.bas
+--------------------------------------------------------------------------------
+Option Compare Database
+Option Explicit
+
+'=========================================================
+' basVbaDumpAll
+' Exports all VBA components to disk for AI/context review.
+'
+' Exports:
+'   - Standard modules  -> .bas
+'   - Class modules     -> .cls
+'   - Forms/Reports     -> .cls (code-behind)
+'
+' Also creates:
+'   - _VBA_EXPORT_INDEX.txt with a simple inventory.
+'
+' Prereqs:
+'   - Reference: Microsoft Visual Basic for Applications Extensibility 5.3
+'   - Trust Center: "Trust access to the VBA project object model" enabled
+'=========================================================
+
+Public Sub ExportAllVbaModules(Optional ByVal outputFolder As String = "", _
+                              Optional ByVal includeEmpty As Boolean = False)
+    On Error GoTo EH
+
+    Dim basePath As String
+    Dim exportPath As String
+    Dim idxPath As String
+    Dim f As Integer
+
+    Dim vbProj As VBIDE.VBProject
+    Dim vbComp As VBIDE.VBComponent
+
+    '-----------------------------
+    ' Resolve output folder
+    '-----------------------------
+    If Len(Trim$(outputFolder)) = 0 Then
+        basePath = CurrentProject.path
+        exportPath = basePath & "\_AI_VBA_DUMP_" & Format$(Now, "yyyy-mm-dd_hhnnss")
+    Else
+        exportPath = outputFolder
+        ' If user gave a relative folder, anchor it in CurrentProject.Path
+        If InStr(1, exportPath, ":\", vbTextCompare) = 0 And Left$(exportPath, 2) <> "\\" Then
+            exportPath = CurrentProject.path & "\" & exportPath
+        End If
+    End If
+
+    EnsureFolder exportPath
+
+    idxPath = exportPath & "\_VBA_EXPORT_INDEX.txt"
+    f = FreeFile
+    Open idxPath For Output As #f
+
+    Print #f, "VBA Export Index"
+    Print #f, "Database: " & CurrentDb.name
+    Print #f, "ProjectPath: " & CurrentProject.path
+    Print #f, "ExportPath: " & exportPath
+    Print #f, "Exported: " & Format$(Now, "yyyy-mm-dd hh:nn:ss")
+    Print #f, String$(60, "-")
+    Print #f, "ComponentName" & vbTab & "Type" & vbTab & "Lines" & vbTab & "FileName"
+
+    '-----------------------------
+    ' Export each component
+    '-----------------------------
+    Set vbProj = Application.VBE.ActiveVBProject
+
+    For Each vbComp In vbProj.VBComponents
+
+        Dim compName As String
+        Dim ext As String
+        Dim outFile As String
+        Dim compTypeName As String
+        Dim lineCount As Long
+
+        compName = vbComp.name
+        lineCount = GetComponentLineCount(vbComp)
+
+        If includeEmpty = False Then
+            If lineCount = 0 Then
+                ' Skip empty stubs unless requested
+                GoTo NextComp
+            End If
+        End If
+
+        ext = ComponentExtension(vbComp.Type)
+        compTypeName = ComponentTypeName(vbComp.Type)
+
+        outFile = exportPath & "\" & SafeFileName(compName) & ext
+
+        ' VBComponent.Export writes the correct format for the type
+        vbComp.Export outFile
+
+        Print #f, compName & vbTab & compTypeName & vbTab & lineCount & vbTab & Dir$(outFile)
+
+NextComp:
+    Next vbComp
+
+    Close #f
+
+    MsgBox "Export complete." & vbCrLf & vbCrLf & _
+           "Folder:" & vbCrLf & exportPath & vbCrLf & vbCrLf & _
+           "Index:" & vbCrLf & idxPath, vbInformation, "VBA Export"
+
+    Exit Sub
+
+EH:
+    On Error Resume Next
+    If f <> 0 Then Close #f
+
+    Dim msg As String
+    msg = "Export failed." & vbCrLf & vbCrLf & _
+          "Err " & Err.Number & ": " & Err.Description & vbCrLf & vbCrLf & _
+          "Common causes:" & vbCrLf & _
+          " - Missing reference: 'Microsoft VBA Extensibility 5.3'" & vbCrLf & _
+          " - Trust Center: 'Trust access to the VBA project object model' not enabled" & vbCrLf & _
+          " - Output folder path invalid or not writable"
+
+    MsgBox msg, vbCritical, "VBA Export"
+End Sub
+
+'-----------------------------
+' Helpers
+'-----------------------------
+
+Private Sub EnsureFolder(ByVal folderPath As String)
+    If Len(Dir$(folderPath, vbDirectory)) = 0 Then
+        MkDir folderPath
+    End If
+End Sub
+
+Private Function ComponentExtension(ByVal compType As VBIDE.vbext_ComponentType) As String
+    Select Case compType
+        Case vbext_ct_StdModule:  ComponentExtension = ".bas"
+        Case vbext_ct_ClassModule: ComponentExtension = ".cls"
+        Case vbext_ct_MSForm:      ComponentExtension = ".frm" ' Access usually uses .cls for code-behind; export gives the right type
+        Case vbext_ct_Document:    ComponentExtension = ".cls" ' Form/Report modules export as .cls
+        Case Else:                 ComponentExtension = ".txt"
+    End Select
+End Function
+
+Private Function ComponentTypeName(ByVal compType As VBIDE.vbext_ComponentType) As String
+    Select Case compType
+        Case vbext_ct_StdModule:   ComponentTypeName = "StdModule"
+        Case vbext_ct_ClassModule: ComponentTypeName = "ClassModule"
+        Case vbext_ct_MSForm:      ComponentTypeName = "MSForm"
+        Case vbext_ct_Document:    ComponentTypeName = "Document(Form/Report)"
+        Case Else:                 ComponentTypeName = "Other"
+    End Select
+End Function
+
+Private Function SafeFileName(ByVal nameIn As String) As String
+    ' Replace characters that are invalid in Windows file names
+    Dim s As String
+    s = nameIn
+    s = Replace(s, "<", "_")
+    s = Replace(s, ">", "_")
+    s = Replace(s, ":", "_")
+    s = Replace(s, """", "_")
+    s = Replace(s, "/", "_")
+    s = Replace(s, "\", "_")
+    s = Replace(s, "|", "_")
+    s = Replace(s, "?", "_")
+    s = Replace(s, "*", "_")
+    SafeFileName = s
+End Function
+
+Private Function GetComponentLineCount(ByVal vbComp As VBIDE.VBComponent) As Long
+    On Error GoTo EH
+    GetComponentLineCount = vbComp.codeModule.CountOfLines
+    Exit Function
+EH:
+    GetComponentLineCount = 0
+End Function
+
+
+
+
+--------------------------------------------------------------------------------
+NAME:  basVBADumpTxt
+TYPE:  StdModule
+LINES: 230
+FILE:  basVBADumpTxt.bas
+--------------------------------------------------------------------------------
+Option Compare Database
+Option Explicit
+
+'=========================================================
+' basVBADumpTxt
+'
+' Self-contained VBA project dumper for AI/context review.
+'
+' What it does:
+'   - Writes a single combined text file: AllModulesDump.txt
+'   - Writes an inventory file: _INDEX.txt
+'   - (Optional) also exports individual .bas/.cls files
+'
+' Usage:
+'   DumpVBAProjectToTxt "C:\Temp"
+'   DumpVBAProjectToTxt "C:\Temp", True, False    ' also export individual files, exclude documents
+'
+' Requires:
+'   - Reference: Microsoft Visual Basic for Applications Extensibility 5.3
+'   - Trust Center: "Trust access to the VBA project object model"
+'=========================================================
+
+Public Sub DumpVBAProjectToTxt(ByVal targetRootFolder As String, _
+                               Optional ByVal alsoExportIndividualFiles As Boolean = False, _
+                               Optional ByVal includeDocumentModules As Boolean = True, _
+                               Optional ByVal includeEmptyModules As Boolean = False)
+
+    On Error GoTo EH
+
+    Dim exportPath As String
+    exportPath = BuildExportPath(targetRootFolder)
+
+    EnsureFolder exportPath
+
+    Dim idxPath As String
+    Dim dumpPath As String
+    idxPath = exportPath & "\_INDEX.txt"
+    dumpPath = exportPath & "\AllModulesDump.txt"
+
+    Dim vbProj As VBIDE.VBProject
+    Dim vbComp As VBIDE.VBComponent
+    Set vbProj = Application.VBE.ActiveVBProject
+
+    '-------------------------
+    ' Create INDEX file
+    '-------------------------
+    Dim fIdx As Integer
+    fIdx = FreeFile
+    Open idxPath For Output As #fIdx
+    Print #fIdx, "VBA Dump Index"
+    Print #fIdx, "Database: " & CurrentDb.name
+    Print #fIdx, "ProjectPath: " & CurrentProject.path
+    Print #fIdx, "ExportPath: " & exportPath
+    Print #fIdx, "Generated: " & Format$(Now, "yyyy-mm-dd hh:nn:ss")
+    Print #fIdx, String$(80, "-")
+    Print #fIdx, "ComponentName" & vbTab & "Type" & vbTab & "Lines" & vbTab & "ExportedFile"
+
+    '-------------------------
+    ' Create BIG DUMP file
+    '-------------------------
+    Dim fDump As Integer
+    fDump = FreeFile
+    Open dumpPath For Output As #fDump
+    Print #fDump, "ALL VBA MODULES DUMP"
+    Print #fDump, "Database: " & CurrentDb.name
+    Print #fDump, "Generated: " & Format$(Now, "yyyy-mm-dd hh:nn:ss")
+    Print #fDump, String$(80, "=")
+    Print #fDump, ""
+
+    '-------------------------
+    ' Iterate components
+    '-------------------------
+    For Each vbComp In vbProj.VBComponents
+
+        If (Not includeDocumentModules) Then
+            If vbComp.Type = vbext_ct_Document Then GoTo NextComp
+        End If
+
+        Dim lineCount As Long
+        lineCount = 0
+        On Error Resume Next
+        lineCount = vbComp.codeModule.CountOfLines
+        On Error GoTo EH
+
+        If (Not includeEmptyModules) Then
+            If lineCount = 0 Then GoTo NextComp
+        End If
+
+        ' Optional per-file export
+        Dim exportedFile As String
+        exportedFile = ""
+
+        If alsoExportIndividualFiles Then
+            exportedFile = exportPath & "\" & SafeFileName(vbComp.name) & ComponentExtension(vbComp.Type)
+            On Error Resume Next
+            vbComp.Export exportedFile
+            If Err.Number <> 0 Then
+                exportedFile = "(export failed: " & Err.Number & ")"
+                Err.Clear
+            Else
+                exportedFile = Dir$(exportedFile)
+            End If
+            On Error GoTo EH
+        End If
+
+        ' Write to index
+        Print #fIdx, vbComp.name & vbTab & ComponentTypeName(vbComp.Type) & vbTab & lineCount & vbTab & exportedFile
+
+        ' Write header to dump
+        Print #fDump, String$(80, "-")
+        Print #fDump, "NAME:  " & vbComp.name
+        Print #fDump, "TYPE:  " & ComponentTypeName(vbComp.Type)
+        Print #fDump, "LINES: " & lineCount
+        Print #fDump, "FILE:  " & vbComp.name & ComponentExtension(vbComp.Type)
+        Print #fDump, String$(80, "-")
+
+        ' Write code body
+        If lineCount > 0 Then
+            Dim body As String
+            body = vbComp.codeModule.lines(1, lineCount)
+            Print #fDump, body
+        End If
+
+        Print #fDump, vbCrLf
+
+NextComp:
+    Next vbComp
+
+    Close #fIdx
+    Close #fDump
+
+    MsgBox "VBA dump created successfully." & vbCrLf & vbCrLf & _
+           "UPLOAD THIS FILE:" & vbCrLf & dumpPath & vbCrLf & vbCrLf & _
+           "Index:" & vbCrLf & idxPath, vbInformation, "basVBADumpTxt"
+
+    Exit Sub
+
+EH:
+    On Error Resume Next
+    If fIdx <> 0 Then Close #fIdx
+    If fDump <> 0 Then Close #fDump
+
+    MsgBox "Dump failed." & vbCrLf & vbCrLf & _
+           "Err " & Err.Number & ": " & Err.Description & vbCrLf & vbCrLf & _
+           "Common causes:" & vbCrLf & _
+           " - Missing reference: 'Microsoft Visual Basic for Applications Extensibility 5.3'" & vbCrLf & _
+           " - Trust Center: 'Trust access to the VBA project object model' is OFF" & vbCrLf & _
+           " - Target folder not writable", vbCritical, "basVBADumpTxt"
+End Sub
+
+'=========================================================
+' Helpers (self-contained)
+'=========================================================
+
+Private Function BuildExportPath(ByVal targetRootFolder As String) As String
+    Dim root As String
+    root = Trim$(targetRootFolder)
+
+    ' Normalize slashes for Windows paths
+    root = Replace(root, "/", "\")
+
+    ' Strip trailing slash
+    Do While Right$(root, 1) = "\"
+        root = Left$(root, Len(root) - 1)
+    Loop
+
+    BuildExportPath = root & "\_AI_VBA_DUMP_" & Format$(Now, "yyyy-mm-dd_hhnnss")
+End Function
+
+Private Sub EnsureFolder(ByVal folderPath As String)
+    ' Creates nested folders if needed
+    Dim parts() As String
+    Dim i As Long
+    Dim pathSoFar As String
+
+    folderPath = Replace(folderPath, "/", "\")
+    parts = Split(folderPath, "\")
+
+    ' Handle UNC paths (\\server\share\...)
+    If Left$(folderPath, 2) = "\\" Then
+        pathSoFar = "\\" & parts(2) & "\" & parts(3)
+        i = 4
+    Else
+        pathSoFar = parts(0)
+        i = 1
+    End If
+
+    For i = i To UBound(parts)
+        pathSoFar = pathSoFar & "\" & parts(i)
+        If Len(Dir$(pathSoFar, vbDirectory)) = 0 Then
+            MkDir pathSoFar
+        End If
+    Next i
+End Sub
+
+Private Function SafeFileName(ByVal nameIn As String) As String
+    Dim s As String
+    s = nameIn
+    s = Replace(s, "<", "_")
+    s = Replace(s, ">", "_")
+    s = Replace(s, ":", "_")
+    s = Replace(s, """", "_")
+    s = Replace(s, "/", "_")
+    s = Replace(s, "\", "_")
+    s = Replace(s, "|", "_")
+    s = Replace(s, "?", "_")
+    s = Replace(s, "*", "_")
+    SafeFileName = s
+End Function
+
+Private Function ComponentExtension(ByVal compType As VBIDE.vbext_ComponentType) As String
+    Select Case compType
+        Case vbext_ct_StdModule:   ComponentExtension = ".bas"
+        Case vbext_ct_ClassModule: ComponentExtension = ".cls"
+        Case vbext_ct_Document:    ComponentExtension = ".cls" ' Form/Report code-behind
+        Case vbext_ct_MSForm:      ComponentExtension = ".frm"
+        Case Else:                 ComponentExtension = ".txt"
+    End Select
+End Function
+
+Private Function ComponentTypeName(ByVal compType As VBIDE.vbext_ComponentType) As String
+    Select Case compType
+        Case vbext_ct_StdModule:   ComponentTypeName = "StdModule"
+        Case vbext_ct_ClassModule: ComponentTypeName = "ClassModule"
+        Case vbext_ct_Document:    ComponentTypeName = "Document(Form/Report)"
+        Case vbext_ct_MSForm:      ComponentTypeName = "MSForm"
+        Case Else:                 ComponentTypeName = "Other"
+    End Select
+End Function
+
+
+
