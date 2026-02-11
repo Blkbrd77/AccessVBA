@@ -1,0 +1,35 @@
+VBA Dump Index
+Database: \\hmc-dc01\Users\JSAMPLES\Q-1019_Database\6Feb25FE_BESplit.accdb
+ProjectPath: \\hmc-dc01\Users\JSAMPLES\Q-1019_Database
+ExportPath: C:\Temp\_AI_VBA_DUMP_2026-02-11_152342
+Generated: 2026-02-11 15:23:42
+--------------------------------------------------------------------------------
+ComponentName	Type	Lines	ExportedFile
+Form_z_Deprecated_frmSalesOrderEntry	Document(Form/Report)	289	
+Form_frmOrderList	Document(Form/Report)	491	
+basOrderNumbering	StdModule	66	
+basSchemaDump	StdModule	484	
+basFormDump	StdModule	153	
+Form_dlgNewOrderType	Document(Form/Report)	111	
+Form_fsubProjectPicker	Document(Form/Report)	20	
+basSalesOrdersIndexes	StdModule	28	
+basOrderNumberGen	StdModule	226	
+basSeqAllocator	StdModule	137	
+basProjectAssignment	StdModule	69	
+basResetRoutine	StdModule	109	
+Form_dlgBatchGenerateOrders	Document(Form/Report)	214	
+basBatchWizard	StdModule	370	
+basAIContext	StdModule	641	
+basDiag	StdModule	43	
+basDataImport	StdModule	2	
+basOrderFunctions	StdModule	153	
+basModBackorderDiag	StdModule	94	
+Form_dlgStampBilledDate	Document(Form/Report)	51	
+Form_dlgCancelOrder	Document(Form/Report)	65	
+basContextLite	StdModule	424	
+basTableDeprecateAnalysis	StdModule	83	
+basTestFunctions	StdModule	315	
+basCleanImportErrors	StdModule	26	
+basAuditLogging	StdModule	73	
+basVBADumpALL	StdModule	174	
+basVBADumpTxt	StdModule	230	
