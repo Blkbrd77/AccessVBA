@@ -13,3 +13,6 @@ open or write to the file
 "\hmc-dc01\Users\SAMPLES\Q-1019_Database'. It is already
 opened exclusively by another user, or you need permission to view
 and write its data.
+
+
+FAIL: The Microsoft Access database engine cannot open or write to the file '\\hmc-dc01\Users\JSAMPLES\Q-1019_Database'. It is already opened exclusively by another user, or you need permission to view and write its data. (51 ms). Path=\\hmc-dc01\Users\JS
