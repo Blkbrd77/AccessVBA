@@ -1,0 +1,15 @@
+Still Retry List indefinetly:
+
+Cannot connect to the database.
+This usually means:
+- The server is unreachable (check your network connection)
+- VPN is not connected (remote users must connect VPN first)
+- The shared drive is temporarily unavailable
+
+Click Retry to try again, or Cancel to exit.
+
+Error -2147212502: The Microsoft Access database engine cannot
+open or write to the file
+"\hmc-dc01\Users\SAMPLES\Q-1019_Database'. It is already
+opened exclusively by another user, or you need permission to view
+and write its data.
