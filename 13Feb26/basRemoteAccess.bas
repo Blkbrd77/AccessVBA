@@ -13,7 +13,11 @@
 '
 ' DEPENDENCIES:
 '   - basConfig    : GetConfig("BackendPath")
-'   - basAuditLog  : LogConcurrencyEvent(eventType, details)
+'
+' NOTE: No dependency on basAuditLog. LogConcurrencyEvent is NOT
+' called here because tblConcurrencyLog is a linked BE table --
+' logging to it during a connection test is circular (the BE may
+' be unreachable, which is exactly what we are testing for).
 '
 ' PUBLIC INTERFACE:
 '   TestBackendConnection()          As Boolean
@@ -68,7 +72,6 @@ Public Function TestBackendConnection() As Boolean
     If Len(Trim$(backendPath)) = 0 Then
         m_LastErrNumber      = vbObjectError + 9001
         m_LastErrDescription = "BackendPath is not configured. Open tblConfig and set the BackendPath key."
-        LogConcurrencyEvent "BackendConnection", "FAIL: BackendPath is blank."
         TestBackendConnection = False
         Exit Function
     End If
@@ -81,12 +84,10 @@ Public Function TestBackendConnection() As Boolean
     m_LastLatencyMs = ms
 
     If ok Then
-        LogConcurrencyEvent "BackendConnection", "PASS: Connected in " & ms & " ms. Path=" & backendPath
         TestBackendConnection = True
     Else
         m_LastErrNumber      = vbObjectError + 9002
         m_LastErrDescription = errText
-        LogConcurrencyEvent "BackendConnection", "FAIL: " & errText & " (" & ms & " ms). Path=" & backendPath
         TestBackendConnection = False
     End If
 
@@ -95,7 +96,6 @@ Public Function TestBackendConnection() As Boolean
 EH:
     m_LastErrNumber      = Err.Number
     m_LastErrDescription = Err.Description
-    LogConcurrencyEvent "BackendConnection", "ERROR: " & Err.Number & " - " & Err.Description
     TestBackendConnection = False
 
 End Function
@@ -121,8 +121,6 @@ Public Function HandleNetworkError( _
 
     Dim msg  As String
     Dim resp As VbMsgBoxResult
-
-    LogConcurrencyEvent "NetworkError", "Err " & ErrorNumber & ": " & ErrorDescription
 
     msg = "Cannot connect to the database." & vbCrLf & vbCrLf & _
           "This usually means:" & vbCrLf & _
