@@ -2,7 +2,22 @@
 
 **Task:** Validate the Placker API to confirm it returns comments, checklist completion, and close date for Trello cards moved to "Done."
 
-**Reference Docs:** https://placker.com/docs/api/index.html
+**OpenAPI Spec:** https://github.com/Blkbrd77/TrelloPOC/blob/main/openapi.yaml
+**Full Docs:** https://placker.com/docs/api/index.html
+
+## Confirmed API Endpoints (from openapi.yaml)
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/me/notifications` | Auth check |
+| GET | `/board` | List all boards |
+| GET | `/board/{board}/list` | Lists on a board |
+| GET | `/list/{list}/card` | Cards in a specific list |
+| GET | `/card/{card}` | Full card detail |
+| GET | `/card/{card}/comment` | Card comments |
+| GET | `/card/{card}/checklist` | Card checklists + items |
+| GET | `/webhook/{board}/example` | Example webhook payload |
+| POST | `/webhook/{board}` | Create a webhook |
 
 ---
 
@@ -44,50 +59,54 @@
 
 ## Step 4: Run Requests in Order
 
-### Request 1 — Auth Check
-**Purpose:** Confirm the API key works and the endpoint is reachable.
+### Request 1 — Auth Check (`GET /me/notifications`)
+**Purpose:** Confirm the API key works and the base URL is correct.
 
-- **Pass:** 200 OK response with your user account data
-- **Fail (401):** API key is wrong or not formatted correctly — check the Authorization header format; it may be `X-API-Key: {{apiKey}}` instead of `Bearer`
-- **Fail (403):** Your Placker plan may not include API access
+- **Pass:** 200 OK
+- **Fail (401):** API key wrong or auth header format incorrect — check the docs security section; it may be `X-API-Key: {{apiKey}}` instead of `Authorization: Bearer`
+- **Fail (404):** Base URL is wrong — check the servers section of the docs
 
-### Request 2 — List Boards
+### Request 2 — List Boards (`GET /board`)
 **Purpose:** Find the board ID for your Trello board.
 
-- Run the request
-- In the Postman console (View > Console), find your target board
-- Copy its `id` value into the `boardId` collection variable
+- `boardId` is auto-set to the first result — override it if you have multiple boards
+- All board IDs and names are logged to the Postman console
 
-### Request 3 — Get Lists on Board
+### Request 3 — Get Lists on Board (`GET /board/{board}/list`)
 **Purpose:** Find the "Done" list ID.
 
-- Run the request with `boardId` set
-- Find the list named "Done" (or your equivalent completion list)
-- Copy its `id` into the `listId` variable
+- The script auto-detects a list named "Done" or containing "done"/"complete" and sets `listId`
+- If not found, manually set `listId` from the console output
 
-### Request 4 — Get Cards in Done List
-**Purpose:** Retrieve cards from Done and inspect data shape.
+### Request 4 — Get Cards in Done List (`GET /list/{list}/card`)
+**Purpose:** Retrieve cards from the Done list using the correct endpoint.
 
-- Run the request
-- The test script logs the full first card to the Postman console
-- The `cardId` variable is auto-set to the first card's ID
-- **Key:** Note which top-level fields are present for comments, checklists, and dates
+- Path is `/list/{list}/card` — not `/board/{board}/card` with a filter
+- `cardId` is auto-set to the first card returned
+- Console logs which enrichment fields (comments, checklists, dates) appear at the top level
 
-### Request 5 — Get Single Card Detail
-**Purpose:** Primary validation of the 3 required data fields.
+### Request 5 — Get Card Detail (`GET /card/{card}`)
+**Purpose:** Full card object + close date validation.
 
-- Check the **Test Results** tab after running
-- Three tests will run:
-  1. **REQUIREMENT CHECK: Comments field present**
-  2. **REQUIREMENT CHECK: Checklist completion field present**
-  3. **REQUIREMENT CHECK: Close/completion date field present**
-- The full card JSON is logged to console for inspection
+- Scans for close date across known field name candidates
+- Reports whether comments/checklists are inline or via sub-endpoints
 
-### Request 6 — Get Card Comments (Explicit)
-**Purpose:** Determine if comments have a dedicated sub-endpoint or are embedded.
+### Request 6 — Get Comments (`GET /card/{card}/comment`)
+**Purpose:** Confirmed comments sub-endpoint from the openapi.yaml.
 
-- If 200: document the `comments` sub-resource path for Power Automate
-- If 404: use the embedded comments field found in Request 5
+- Logs the full comment structure — document the field names for Power Automate mapping
+
+### Request 7 — Get Checklists (`GET /card/{card}/checklist`)
+**Purpose:** Confirmed checklists sub-endpoint from the openapi.yaml.
+
+- Auto-sets `checklistId` from the first result
+- Scans checklist items for completion state field names (`state`, `checked`, `complete`, etc.)
+
+### Request 8 — Webhook Example (`GET /webhook/{board}/example`)
+**Purpose:** See what the Power Automate trigger payload looks like before building the flow.
+
+- Shows what data Placker sends when a card event fires
+- Identifies the card ID field to use in follow-up API calls within the flow
 
 ---
 

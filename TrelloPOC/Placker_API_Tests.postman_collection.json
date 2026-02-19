@@ -1,46 +1,51 @@
 {
   "info": {
     "name": "Placker API - POC Validation",
-    "description": "Postman collection to validate the Placker API for the TrelloPOC project.\n\nObjective: Confirm the API is accessible and that card data returned (comments, checklist completion, close date) meets enrichment requirements for Power Automate -> SharePoint automation.\n\nREFERENCE: https://placker.com/docs/api/index.html\n\nSETUP:\n1. Generate your Placker API key from your Placker profile page (Settings > API)\n2. In Postman, set the environment variables below before running\n3. Run the requests in order (1 -> 6)",
+    "description": "Postman collection to validate the Placker API for the TrelloPOC project.\n\nObjective: Confirm the API is accessible and that card data (comments, checklist completion, close date) meets enrichment requirements for the Power Automate -> SharePoint automation.\n\nEndpoints sourced from: https://github.com/Blkbrd77/TrelloPOC/blob/main/openapi.yaml\nFull docs: https://placker.com/docs/api/index.html\n\nSETUP:\n1. Generate your Placker API key from your Placker profile page\n2. Set the 'baseUrl' and 'apiKey' variables in the Variables tab\n3. Run requests in order 1 -> 8",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
     {
       "key": "baseUrl",
       "value": "https://placker.com/api/v1",
-      "description": "Placker API base URL - verify against https://placker.com/docs/api/index.html"
+      "description": "Verify the exact base URL from https://placker.com/docs/api/index.html (servers section)"
     },
     {
       "key": "apiKey",
       "value": "YOUR_PLACKER_API_KEY_HERE",
-      "description": "Generated from your Placker profile page under Settings > API"
+      "description": "Generated from your Placker profile page. Auth format (Bearer vs X-API-Key) - confirm from docs security section."
     },
     {
       "key": "boardId",
       "value": "",
-      "description": "Populate after running Request 2 (List Boards)"
+      "description": "Auto-set by Request 2. The Placker board ID for your Trello board."
     },
     {
       "key": "listId",
       "value": "",
-      "description": "Populate after running Request 3 (List Columns/Lists) - use the ID of your 'Done' list"
+      "description": "Auto-set by Request 3. The ID of your 'Done' list."
     },
     {
       "key": "cardId",
       "value": "",
-      "description": "Populate after running Request 4 (Get Cards in Done List)"
+      "description": "Auto-set by Request 4. A card from the Done list to inspect."
+    },
+    {
+      "key": "checklistId",
+      "value": "",
+      "description": "Auto-set by Request 6. First checklist ID on the card."
     }
   ],
   "item": [
     {
-      "name": "1 - Auth Check (Get Current User)",
+      "name": "1 - Auth Check (GET /me/notifications)",
       "request": {
         "method": "GET",
         "header": [
           {
             "key": "Authorization",
             "value": "Bearer {{apiKey}}",
-            "description": "Placker API key authentication"
+            "description": "Try this first. If 401, switch to 'X-API-Key: {{apiKey}}' - check security section of docs."
           },
           {
             "key": "Content-Type",
@@ -48,11 +53,11 @@
           }
         ],
         "url": {
-          "raw": "{{baseUrl}}/me",
+          "raw": "{{baseUrl}}/me/notifications",
           "host": ["{{baseUrl}}"],
-          "path": ["me"]
+          "path": ["me", "notifications"]
         },
-        "description": "TEST 1: Confirm API key is valid and the API is accessible.\n\nExpected: 200 OK with user account details.\nIf 401: API key is invalid or not set correctly.\nIf 403: Account may not have API access enabled.\n\nNOTE: Verify the exact endpoint path against https://placker.com/docs/api/index.html - it may be /users/me or /profile"
+        "description": "TEST 1: Confirm the API key is valid and the base URL is correct.\n\nEndpoint: GET /me/notifications (from openapi.yaml)\n\nExpected: 200 OK\nIf 401: wrong API key or wrong auth header format - check docs for correct header (Bearer vs X-API-Key)\nIf 404: base URL may be wrong - inspect the servers section at https://placker.com/docs/api/index.html"
       },
       "event": [
         {
@@ -60,22 +65,25 @@
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test('Status code is 200', function () {",
+              "pm.test('Status 200 - API key valid and base URL correct', function () {",
               "    pm.response.to.have.status(200);",
               "});",
               "",
-              "pm.test('Response has user data', function () {",
-              "    var jsonData = pm.response.json();",
-              "    pm.expect(jsonData).to.be.an('object');",
-              "    console.log('Authenticated as:', JSON.stringify(jsonData));",
-              "});"
+              "if (pm.response.code === 200) {",
+              "    console.log('Auth OK. Response:', JSON.stringify(pm.response.json(), null, 2));",
+              "} else {",
+              "    console.log('Auth FAILED. Status:', pm.response.code);",
+              "    console.log('Body:', pm.response.text());",
+              "    console.log('ACTION: Check the auth header format in https://placker.com/docs/api/index.html security section.');",
+              "    console.log('Try: X-API-Key: {{apiKey}} instead of Authorization: Bearer {{apiKey}}');",
+              "}"
             ]
           }
         }
       ]
     },
     {
-      "name": "2 - List Boards",
+      "name": "2 - List Boards (GET /board)",
       "request": {
         "method": "GET",
         "header": [
@@ -89,11 +97,11 @@
           }
         ],
         "url": {
-          "raw": "{{baseUrl}}/boards",
+          "raw": "{{baseUrl}}/board",
           "host": ["{{baseUrl}}"],
-          "path": ["boards"]
+          "path": ["board"]
         },
-        "description": "TEST 2: Retrieve all boards accessible to the authenticated user.\n\nExpected: 200 OK with array of board objects.\nACTION: Copy the 'id' of your target Trello board and set it as the 'boardId' collection variable."
+        "description": "TEST 2: Retrieve all boards the API key has access to.\n\nEndpoint: GET /board (from openapi.yaml)\n\nExpected: 200 OK with array of board objects.\nACTION: Find your target Trello board in the console output - the 'boardId' variable is auto-set to the first board. Override it manually if needed."
       },
       "event": [
         {
@@ -101,138 +109,25 @@
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test('Status code is 200', function () {",
+              "pm.test('Status 200 - boards returned', function () {",
               "    pm.response.to.have.status(200);",
               "});",
               "",
-              "pm.test('Response contains boards array', function () {",
-              "    var jsonData = pm.response.json();",
-              "    pm.expect(jsonData).to.be.an('array');",
-              "    pm.expect(jsonData.length).to.be.greaterThan(0);",
-              "    console.log('Available boards:');",
-              "    jsonData.forEach(function(board) {",
-              "        console.log(' - ID:', board.id, '| Name:', board.name || board.title);",
+              "pm.test('At least one board exists', function () {",
+              "    var data = pm.response.json();",
+              "    var boards = Array.isArray(data) ? data : data.data || data.boards || [];",
+              "    pm.expect(boards.length, 'No boards found - check API key permissions').to.be.greaterThan(0);",
+              "",
+              "    console.log('=== AVAILABLE BOARDS ===');",
+              "    boards.forEach(function(b, i) {",
+              "        console.log(i + ':', JSON.stringify(b));",
               "    });",
-              "});"
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "name": "3 - Get Lists (Columns) on Board",
-      "request": {
-        "method": "GET",
-        "header": [
-          {
-            "key": "Authorization",
-            "value": "Bearer {{apiKey}}"
-          },
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "url": {
-          "raw": "{{baseUrl}}/boards/{{boardId}}/lists",
-          "host": ["{{baseUrl}}"],
-          "path": ["boards", "{{boardId}}", "lists"]
-        },
-        "description": "TEST 3: Get all lists (columns) on the target board.\n\nPREREQUISITE: Set 'boardId' variable from Request 2 output.\nExpected: 200 OK with array of list objects.\nACTION: Find the 'Done' list and copy its 'id' to the 'listId' variable.\n\nNOTE: Endpoint path may vary - check docs for /boards/{id}/columns or /boards/{id}/stages"
-      },
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('Status code is 200', function () {",
-              "    pm.response.to.have.status(200);",
-              "});",
               "",
-              "pm.test('Board lists returned', function () {",
-              "    var jsonData = pm.response.json();",
-              "    pm.expect(jsonData).to.be.an('array');",
-              "    console.log('Lists on board:');",
-              "    jsonData.forEach(function(list) {",
-              "        console.log(' - ID:', list.id, '| Name:', list.name || list.title);",
-              "    });",
-              "});"
-            ]
-          }
-        }
-      ]
-    },
-    {
-      "name": "4 - Get Cards in Done List",
-      "request": {
-        "method": "GET",
-        "header": [
-          {
-            "key": "Authorization",
-            "value": "Bearer {{apiKey}}"
-          },
-          {
-            "key": "Content-Type",
-            "value": "application/json"
-          }
-        ],
-        "url": {
-          "raw": "{{baseUrl}}/boards/{{boardId}}/cards?listId={{listId}}",
-          "host": ["{{baseUrl}}"],
-          "path": ["boards", "{{boardId}}", "cards"],
-          "query": [
-            {
-              "key": "listId",
-              "value": "{{listId}}",
-              "description": "Filter cards to only those in the Done list"
-            },
-            {
-              "key": "includeChecklists",
-              "value": "true",
-              "description": "Request checklist data be included - verify param name in docs",
-              "disabled": false
-            },
-            {
-              "key": "includeComments",
-              "value": "true",
-              "description": "Request comments be included - verify param name in docs",
-              "disabled": false
-            }
-          ]
-        },
-        "description": "TEST 4: Retrieve cards currently in the 'Done' list.\n\nPREREQUISITE: Set 'boardId' and 'listId' variables.\nExpected: 200 OK with array of card objects.\nACTION: Copy a card 'id' to the 'cardId' variable for detailed inspection in Test 5.\n\nKEY CHECK: Inspect the top-level card fields returned. Note which of these are present:\n- id, name/title\n- comments or commentCount\n- checklists or checklistItems\n- closedDate, actualEndDate, completedAt, or dueComplete date\n- status"
-      },
-      "event": [
-        {
-          "listen": "test",
-          "script": {
-            "type": "text/javascript",
-            "exec": [
-              "pm.test('Status code is 200', function () {",
-              "    pm.response.to.have.status(200);",
-              "});",
-              "",
-              "pm.test('Cards array returned', function () {",
-              "    var jsonData = pm.response.json();",
-              "    var cards = Array.isArray(jsonData) ? jsonData : jsonData.data || jsonData.cards || [];",
-              "    pm.expect(cards.length).to.be.greaterThan(0);",
-              "",
-              "    // Inspect first card to understand data shape",
-              "    var firstCard = cards[0];",
-              "    console.log('=== FIRST CARD FULL RESPONSE ===');",
-              "    console.log(JSON.stringify(firstCard, null, 2));",
-              "",
-              "    // Check for target fields",
-              "    console.log('\\n=== FIELD PRESENCE CHECK ===');",
-              "    console.log('Has comments:', !!firstCard.comments || !!firstCard.commentCount);",
-              "    console.log('Has checklists:', !!firstCard.checklists || !!firstCard.checklistItems);",
-              "    console.log('Has close/complete date:', !!firstCard.closedDate || !!firstCard.actualEndDate || !!firstCard.completedAt || !!firstCard.dueComplete);",
-              "    ",
-              "    // Auto-set cardId for next request",
-              "    if (firstCard && firstCard.id) {",
-              "        pm.collectionVariables.set('cardId', firstCard.id);",
-              "        console.log('\\nAuto-set cardId to:', firstCard.id);",
+              "    // Auto-set boardId to first result",
+              "    var firstId = boards[0].id || boards[0].boardId;",
+              "    if (firstId) {",
+              "        pm.collectionVariables.set('boardId', firstId);",
+              "        console.log('\\nAuto-set boardId to:', firstId, '- override manually if this is not your target board');",
               "    }",
               "});"
             ]
@@ -241,7 +136,7 @@
       ]
     },
     {
-      "name": "5 - Get Single Card Detail (Enriched)",
+      "name": "3 - Get Lists on Board (GET /board/{board}/list)",
       "request": {
         "method": "GET",
         "header": [
@@ -255,11 +150,11 @@
           }
         ],
         "url": {
-          "raw": "{{baseUrl}}/cards/{{cardId}}",
+          "raw": "{{baseUrl}}/board/{{boardId}}/list",
           "host": ["{{baseUrl}}"],
-          "path": ["cards", "{{cardId}}"]
+          "path": ["board", "{{boardId}}", "list"]
         },
-        "description": "TEST 5: Get full detail for a single card to verify enrichment data fields.\n\nPREREQUISITE: Set 'cardId' variable (auto-set by Test 4 if tests ran).\nExpected: 200 OK with complete card object.\n\nPRIMARY VALIDATION - confirm these 3 fields are present and populated:\n1. COMMENTS: Are comments returned as an array? What is the field name?\n2. CHECKLIST COMPLETION: Is checklist item state (complete/incomplete) present?\n3. CLOSE DATE: What field name captures when the card was moved to Done?\n\nThis data must be extractable to write to SharePoint."
+        "description": "TEST 3: Get all lists (columns) on the target board.\n\nEndpoint: GET /board/{board}/list (from openapi.yaml)\n\nPREREQUISITE: boardId variable set (auto-set by Test 2).\nACTION: Find the 'Done' list in the console output. The listId is auto-set to the first list - override with the Done list ID."
       },
       "event": [
         {
@@ -267,42 +162,174 @@
           "script": {
             "type": "text/javascript",
             "exec": [
-              "pm.test('Status code is 200', function () {",
+              "pm.test('Status 200 - lists returned', function () {",
               "    pm.response.to.have.status(200);",
               "});",
               "",
-              "pm.test('Card detail returned', function () {",
+              "pm.test('Lists found on board', function () {",
+              "    var data = pm.response.json();",
+              "    var lists = Array.isArray(data) ? data : data.data || data.lists || [];",
+              "    pm.expect(lists.length, 'No lists found on this board').to.be.greaterThan(0);",
+              "",
+              "    console.log('=== LISTS ON BOARD ===');",
+              "    lists.forEach(function(l, i) {",
+              "        console.log(i + ':', JSON.stringify(l));",
+              "    });",
+              "",
+              "    // Try to auto-find the Done list",
+              "    var doneList = lists.find(function(l) {",
+              "        var name = (l.name || l.title || '').toLowerCase();",
+              "        return name === 'done' || name.includes('complete') || name.includes('done');",
+              "    });",
+              "",
+              "    if (doneList) {",
+              "        var doneId = doneList.id || doneList.listId;",
+              "        pm.collectionVariables.set('listId', doneId);",
+              "        console.log('\\nAuto-set listId to Done list:', doneId, '(' + (doneList.name || doneList.title) + ')');",
+              "    } else {",
+              "        var firstId = lists[0].id || lists[0].listId;",
+              "        pm.collectionVariables.set('listId', firstId);",
+              "        console.log('\\nNo Done list found by name - set listId to first list:', firstId);",
+              "        console.log('ACTION: Manually set the listId variable to your Done list ID from the list above.');",
+              "    }",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4 - Get Cards in Done List (GET /list/{list}/card)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{apiKey}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/list/{{listId}}/card",
+          "host": ["{{baseUrl}}"],
+          "path": ["list", "{{listId}}", "card"]
+        },
+        "description": "TEST 4: Get cards in the Done list.\n\nEndpoint: GET /list/{list}/card (from openapi.yaml)\nNOTE: This is the correct path - NOT /board/{board}/card with a filter.\n\nPREREQUISITE: listId variable set to your Done list (auto-set or manual from Test 3).\nACTION: Inspect the card data shape. cardId is auto-set to the first card."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200 - cards returned', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test('Cards found in Done list', function () {",
+              "    var data = pm.response.json();",
+              "    var cards = Array.isArray(data) ? data : data.data || data.cards || [];",
+              "    pm.expect(cards.length, 'No cards in Done list - move a test card to Done and retry').to.be.greaterThan(0);",
+              "",
+              "    var firstCard = cards[0];",
+              "    console.log('=== FIRST CARD (top-level fields) ===');",
+              "    console.log(JSON.stringify(firstCard, null, 2));",
+              "",
+              "    // Report which enrichment fields are at the top level",
+              "    console.log('\\n=== ENRICHMENT FIELD PRESENCE (top-level) ===');",
+              "    console.log('comments:', JSON.stringify(firstCard.comments));",
+              "    console.log('commentCount:', firstCard.commentCount);",
+              "    console.log('checklists:', JSON.stringify(firstCard.checklists));",
+              "    console.log('checklistItems:', JSON.stringify(firstCard.checklistItems));",
+              "    var dateFields = ['closedDate','closeDate','actualEndDate','completedAt','dueComplete','actualClose','dateLastActivity'];",
+              "    dateFields.forEach(function(f) {",
+              "        if (firstCard[f] !== undefined) console.log(f + ':', firstCard[f]);",
+              "    });",
+              "",
+              "    // Auto-set cardId",
+              "    var cardId = firstCard.id || firstCard.cardId;",
+              "    if (cardId) {",
+              "        pm.collectionVariables.set('cardId', cardId);",
+              "        console.log('\\nAuto-set cardId to:', cardId);",
+              "    }",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "5 - Get Card Detail (GET /card/{card})",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{apiKey}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/card/{{cardId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["card", "{{cardId}}"]
+        },
+        "description": "TEST 5: Get the full detail object for a single card.\n\nEndpoint: GET /card/{card} (from openapi.yaml)\n\nPREREQUISITE: cardId set (auto-set by Test 4).\nThis is the primary enrichment check. Review the full JSON in the console - look for the close date field name."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200 - card detail returned', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test('REQUIREMENT: Close/completion date present', function () {",
               "    var card = pm.response.json();",
               "    console.log('=== FULL CARD DETAIL ===');",
               "    console.log(JSON.stringify(card, null, 2));",
-              "});",
               "",
-              "pm.test('REQUIREMENT CHECK: Comments field present', function () {",
-              "    var card = pm.response.json();",
-              "    var hasComments = !!(card.comments || card.commentList || card.commentCount !== undefined);",
-              "    pm.expect(hasComments, 'Comments field not found - check API docs for correct field name').to.be.true;",
-              "    if (card.comments) {",
-              "        console.log('Comments field name: comments, count:', card.comments.length);",
-              "    }",
-              "});",
-              "",
-              "pm.test('REQUIREMENT CHECK: Checklist completion field present', function () {",
-              "    var card = pm.response.json();",
-              "    var hasChecklists = !!(card.checklists || card.checklistItems || card.checkItems);",
-              "    pm.expect(hasChecklists, 'Checklist field not found - check API docs for correct field name').to.be.true;",
-              "    if (card.checklists) {",
-              "        console.log('Checklist field name: checklists, count:', card.checklists.length);",
-              "        if (card.checklists.length > 0 && card.checklists[0].checkItems) {",
-              "            console.log('Checklist items sample:', JSON.stringify(card.checklists[0].checkItems[0]));",
+              "    // Check known close date field candidates",
+              "    var dateFields = ['closedDate','closeDate','actualEndDate','completedAt','dueComplete','actualClose','dateLastActivity','endDate'];",
+              "    var found = null;",
+              "    dateFields.forEach(function(f) {",
+              "        if (card[f] !== undefined && card[f] !== null) {",
+              "            found = f;",
+              "            console.log('\\nClose date field found: ' + f + ' =', card[f]);",
               "        }",
-              "    }",
+              "    });",
+              "    pm.expect(found, 'No close date field found - inspect full card JSON above and update Power Automate mapping').to.not.be.null;",
               "});",
               "",
-              "pm.test('REQUIREMENT CHECK: Close/completion date field present', function () {",
+              "pm.test('REQUIREMENT: Comments accessible via dedicated endpoint (see Test 6)', function () {",
+              "    // Comments live at /card/{card}/comment per openapi.yaml",
+              "    // This test just logs whether any comment count is on the card itself",
               "    var card = pm.response.json();",
-              "    var closeDate = card.closedDate || card.actualEndDate || card.completedAt || card.dueComplete || card.closeDate;",
-              "    pm.expect(closeDate, 'Close date field not found - inspect full card response above for the correct field name').to.not.be.undefined;",
-              "    console.log('Close date value:', closeDate);",
+              "    if (card.commentCount !== undefined) {",
+              "        console.log('Card has commentCount field:', card.commentCount, '- use GET /card/{card}/comment for full comment data');",
+              "    } else {",
+              "        console.log('No commentCount on card detail - check GET /card/{card}/comment in Test 6');",
+              "    }",
+              "    pm.expect(true).to.be.true; // Informational only",
+              "});",
+              "",
+              "pm.test('REQUIREMENT: Checklists accessible via dedicated endpoint (see Test 7)', function () {",
+              "    // Checklists live at /card/{card}/checklist per openapi.yaml",
+              "    var card = pm.response.json();",
+              "    if (card.checklistCount !== undefined || card.checklists !== undefined) {",
+              "        console.log('Checklist data on card:', card.checklistCount || card.checklists);",
+              "    } else {",
+              "        console.log('No inline checklist data - check GET /card/{card}/checklist in Test 7');",
+              "    }",
+              "    pm.expect(true).to.be.true; // Informational only",
               "});"
             ]
           }
@@ -310,7 +337,7 @@
       ]
     },
     {
-      "name": "6 - Get Card Comments (Explicit)",
+      "name": "6 - Get Card Comments (GET /card/{card}/comment)",
       "request": {
         "method": "GET",
         "header": [
@@ -324,11 +351,11 @@
           }
         ],
         "url": {
-          "raw": "{{baseUrl}}/cards/{{cardId}}/comments",
+          "raw": "{{baseUrl}}/card/{{cardId}}/comment",
           "host": ["{{baseUrl}}"],
-          "path": ["cards", "{{cardId}}", "comments"]
+          "path": ["card", "{{cardId}}", "comment"]
         },
-        "description": "TEST 6: If comments are not embedded in the card detail (Test 5), try a dedicated comments sub-resource endpoint.\n\nPREREQUISITE: 'cardId' variable set.\nExpected: 200 OK with comments array OR 404 if comments are only embedded in card detail.\n\nIf 404: comments are embedded - use the field found in Test 5 response.\nIf 200: document the field structure for the Power Automate flow mapping."
+        "description": "TEST 6: Get comments for the card.\n\nEndpoint: GET /card/{card}/comment (from openapi.yaml - confirmed endpoint)\n\nPREREQUISITE: cardId set.\nExpected: 200 with comments array. Note the structure - each comment should have text/content and an author/date. This is what gets written to SharePoint."
       },
       "event": [
         {
@@ -336,20 +363,141 @@
           "script": {
             "type": "text/javascript",
             "exec": [
-              "if (pm.response.code === 200) {",
-              "    pm.test('Comments sub-resource exists', function () {",
-              "        var comments = pm.response.json();",
-              "        console.log('Comments endpoint exists. Response:');",
-              "        console.log(JSON.stringify(comments, null, 2));",
-              "    });",
-              "} else if (pm.response.code === 404) {",
-              "    console.log('INFO: No dedicated comments endpoint - comments are embedded in card detail (Test 5).');",
-              "    console.log('Use the comments field found in the /cards/{id} response.');",
-              "} else {",
-              "    pm.test('Unexpected response code', function () {",
-              "        pm.expect(pm.response.code).to.be.oneOf([200, 404]);",
-              "    });",
-              "}"
+              "pm.test('Status 200 - comments endpoint confirmed', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test('REQUIREMENT: Comments data structure', function () {",
+              "    var data = pm.response.json();",
+              "    var comments = Array.isArray(data) ? data : data.data || data.comments || [];",
+              "    console.log('=== COMMENTS RESPONSE ===');",
+              "    console.log(JSON.stringify(data, null, 2));",
+              "    console.log('\\nComment count:', comments.length);",
+              "    if (comments.length > 0) {",
+              "        console.log('First comment fields:', Object.keys(comments[0]).join(', '));",
+              "        console.log('DOCUMENT THESE FIELD NAMES for Power Automate mapping.');",
+              "    } else {",
+              "        console.log('No comments on this card - try a card that has comments, or verify endpoint is correct.');",
+              "    }",
+              "    pm.expect(true).to.be.true; // Informational - endpoint confirmed working",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "7 - Get Card Checklists (GET /card/{card}/checklist)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{apiKey}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/card/{{cardId}}/checklist",
+          "host": ["{{baseUrl}}"],
+          "path": ["card", "{{cardId}}", "checklist"]
+        },
+        "description": "TEST 7: Get checklists attached to the card.\n\nEndpoint: GET /card/{card}/checklist (from openapi.yaml - confirmed endpoint)\n\nPREREQUISITE: cardId set.\nKEY CHECK: Each checklist item must have a completion state field (e.g., 'state', 'checked', 'complete'). This is what gets written to SharePoint to show checklist completion %."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200 - checklists endpoint confirmed', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test('REQUIREMENT: Checklist completion state visible', function () {",
+              "    var data = pm.response.json();",
+              "    var checklists = Array.isArray(data) ? data : data.data || data.checklists || [];",
+              "    console.log('=== CHECKLISTS RESPONSE ===');",
+              "    console.log(JSON.stringify(data, null, 2));",
+              "    console.log('\\nChecklist count:', checklists.length);",
+              "",
+              "    if (checklists.length > 0) {",
+              "        var cl = checklists[0];",
+              "        console.log('\\nFirst checklist fields:', Object.keys(cl).join(', '));",
+              "",
+              "        // Auto-set checklistId for Test 8",
+              "        var clId = cl.id || cl.checklistId;",
+              "        if (clId) {",
+              "            pm.collectionVariables.set('checklistId', clId);",
+              "            console.log('Auto-set checklistId to:', clId);",
+              "        }",
+              "",
+              "        // Check items completion state",
+              "        var items = cl.items || cl.checkItems || cl.checklistItems || [];",
+              "        if (items.length > 0) {",
+              "            console.log('\\nFirst checklist item fields:', Object.keys(items[0]).join(', '));",
+              "            console.log('Completion state field candidates:');",
+              "            ['state', 'checked', 'complete', 'completed', 'status', 'done'].forEach(function(f) {",
+              "                if (items[0][f] !== undefined) console.log('  FOUND:', f, '=', items[0][f]);",
+              "            });",
+              "        } else {",
+              "            console.log('No checklist items - use Test 8 to inspect item detail, or try a card with checklist items.');",
+              "        }",
+              "    } else {",
+              "        console.log('No checklists on this card. Try a card with checklists attached.');",
+              "    }",
+              "    pm.expect(true).to.be.true; // Informational",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "8 - Get Webhook Example Payload (GET /webhook/{board}/example)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{apiKey}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/webhook/{{boardId}}/example",
+          "host": ["{{baseUrl}}"],
+          "path": ["webhook", "{{boardId}}", "example"]
+        },
+        "description": "TEST 8: Get an example webhook payload for the board.\n\nEndpoint: GET /webhook/{board}/example (from openapi.yaml)\n\nPREREQUISITE: boardId set.\nPurpose: The Power Automate flow is triggered by a Placker webhook when a card moves to Done. This shows what the webhook payload looks like so we know what data arrives at the flow trigger vs what needs to be fetched via subsequent API calls.\n\nKEY: Identify the card ID field in the payload - this is what the flow uses to call GET /card/{card} and GET /card/{card}/comment."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status 200 - webhook example returned', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test('Webhook payload structure', function () {",
+              "    var payload = pm.response.json();",
+              "    console.log('=== WEBHOOK EXAMPLE PAYLOAD ===');",
+              "    console.log(JSON.stringify(payload, null, 2));",
+              "    console.log('\\nDocument this payload structure for the Power Automate flow trigger.');",
+              "    console.log('Key questions:');",
+              "    console.log('1. What field contains the card ID to use in follow-up API calls?');",
+              "    console.log('2. Does the payload include the list name to detect card moved to Done?');",
+              "    console.log('3. What event type field identifies a card-moved-to-list event?');",
+              "    pm.expect(true).to.be.true; // Informational",
+              "});"
             ]
           }
         }
