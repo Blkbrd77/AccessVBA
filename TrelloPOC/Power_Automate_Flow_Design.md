@@ -6,22 +6,50 @@ Based on your completed requirements. Follow each section in order. Where you se
 
 ## Part 1 — Fix the Trigger
 
-**Problem:** "When a new card is added to a board" fires for new cards, not cards moved to Done.
+**The Trello connector in Power Automate only offers two triggers:**
+- "When a new card is added to a board"
+- "When a new card is added to a list"
 
-**Fix:** Replace it with the **Trello connector** trigger, which has native list-move detection.
+Neither is labelled "moved to list," but **"When a new card is added to a list" is the one to use.** The Trello API fires this event whenever a card arrives in a list — whether it was just created there or moved there from another list. Test it first (see below) to confirm it fires on a move before building the rest of the flow.
 
-> Placker is built on top of Trello boards. The Trello connector in Power Automate sees the same boards. Use Trello for the trigger, then call Placker's API for the enriched data.
+### Option A — Try the Trello Trigger First (Free, simplest)
 
-### Steps
+1. Delete your current trigger.
+2. Click **+ Add a trigger** → search **Trello**.
+3. Select **"When a new card is added to a list"**.
+4. Sign in with your Trello account.
+5. Set:
+   - **Board** → COED Database
+   - **List** → Done
+6. Save the flow, then move an existing test card into Done.
+7. Check **My Flows → Run history** within 2 minutes to see if the flow fired.
 
-1. Open your flow and delete the current trigger.
-2. Click **+ Add a trigger** → search for **Trello**.
-3. Select: **"When a card is moved to a list"**
-4. Sign in with your Trello account (same account that sees the COED Database board).
-5. Set the fields:
-   - **Board** → select **COED Database**
-   - **List** → select **Done**
-6. Save. This trigger now fires only when a card lands in Done.
+> **If it fired on the move** → you're done with the trigger, continue to Part 2.
+>
+> **If it only fires for brand-new cards and not moves** → use Option B below.
+
+---
+
+### Option B — Scheduled Poll (Fallback, always works)
+
+If the Trello trigger does not fire on card moves, replace the trigger with a scheduled poll of the Placker API.
+
+1. Delete the Trello trigger.
+2. Click **+ Add a trigger** → search **Schedule** → select **"Recurrence"**.
+3. Set the interval to every **15 minutes** (or whatever frequency suits your team).
+4. At the start of the flow, add an **HTTP** action to call:
+   ```
+   GET https://placker.com/api/v1/list/{listId}/card
+   ```
+   where `{listId}` is the Placker ID of your Done list (find this via Postman — call `GET /board/{boardId}/list` to see all lists and their IDs).
+5. Add **Parse JSON** on the response to get the array of cards currently in Done.
+6. Add a **SharePoint → Get items** action to fetch rows from a small tracking list (create a new SharePoint list called `Processed Cards` with one column: `CardId` as a single line of text).
+7. Inside an **Apply to each** on the Placker cards array, add a **Condition**:
+   - Filter the `Processed Cards` list for the current card ID.
+   - **If 0 results** → this card is new to Done → process it (continue to Part 4 steps), then add its ID to `Processed Cards`.
+   - **If 1+ results** → already processed → skip (add a **Terminate** with status Succeeded or just do nothing).
+
+> This approach is 100% reliable regardless of connector limitations. The trade-off is it runs on a schedule rather than instantly — 15-minute lag is acceptable for most archiving workflows.
 
 ---
 
