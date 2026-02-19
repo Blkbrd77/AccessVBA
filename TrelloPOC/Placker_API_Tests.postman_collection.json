@@ -13,7 +13,7 @@
     {
       "key": "apiKey",
       "value": "YOUR_PLACKER_API_KEY_HERE",
-      "description": "Generated from your Placker profile page. Auth format (Bearer vs X-API-Key) - confirm from docs security section."
+      "description": "Generated from your Placker profile page. Passed as X-API-Key header per Placker API docs."
     },
     {
       "key": "boardId",
@@ -43,9 +43,9 @@
         "method": "GET",
         "header": [
           {
-            "key": "Authorization",
-            "value": "Bearer {{apiKey}}",
-            "description": "Try this first. If 401, switch to 'X-API-Key: {{apiKey}}' - check security section of docs."
+            "key": "X-API-Key",
+            "value": "{{apiKey}}",
+            "description": "Placker API auth header. Confirmed format from Placker API docs."
           },
           {
             "key": "Content-Type",
@@ -57,7 +57,7 @@
           "host": ["{{baseUrl}}"],
           "path": ["me", "notifications"]
         },
-        "description": "TEST 1: Confirm the API key is valid and the base URL is correct.\n\nEndpoint: GET /me/notifications (from openapi.yaml)\n\nExpected: 200 OK\nIf 401: wrong API key or wrong auth header format - check docs for correct header (Bearer vs X-API-Key)\nIf 404: base URL may be wrong - inspect the servers section at https://placker.com/docs/api/index.html"
+        "description": "TEST 1: Confirm the API key is valid and the base URL is correct.\n\nEndpoint: GET /me/notifications (from openapi.yaml)\nAuth: X-API-Key header (confirmed from Placker API docs)\n\nExpected: 200 OK\nIf 401: API key is wrong or missing\nIf 404: base URL may be wrong - check servers section at https://placker.com/docs/api/index.html"
       },
       "event": [
         {
@@ -74,8 +74,7 @@
               "} else {",
               "    console.log('Auth FAILED. Status:', pm.response.code);",
               "    console.log('Body:', pm.response.text());",
-              "    console.log('ACTION: Check the auth header format in https://placker.com/docs/api/index.html security section.');",
-              "    console.log('Try: X-API-Key: {{apiKey}} instead of Authorization: Bearer {{apiKey}}');",
+              "    console.log('ACTION: Verify your API key is correct. Auth uses X-API-Key header (confirmed from Placker docs).');",
               "}"
             ]
           }
@@ -88,8 +87,8 @@
         "method": "GET",
         "header": [
           {
-            "key": "Authorization",
-            "value": "Bearer {{apiKey}}"
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
           },
           {
             "key": "Content-Type",
@@ -141,8 +140,8 @@
         "method": "GET",
         "header": [
           {
-            "key": "Authorization",
-            "value": "Bearer {{apiKey}}"
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
           },
           {
             "key": "Content-Type",
@@ -204,8 +203,8 @@
         "method": "GET",
         "header": [
           {
-            "key": "Authorization",
-            "value": "Bearer {{apiKey}}"
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
           },
           {
             "key": "Content-Type",
@@ -267,8 +266,8 @@
         "method": "GET",
         "header": [
           {
-            "key": "Authorization",
-            "value": "Bearer {{apiKey}}"
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
           },
           {
             "key": "Content-Type",
@@ -342,8 +341,8 @@
         "method": "GET",
         "header": [
           {
-            "key": "Authorization",
-            "value": "Bearer {{apiKey}}"
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
           },
           {
             "key": "Content-Type",
@@ -392,8 +391,8 @@
         "method": "GET",
         "header": [
           {
-            "key": "Authorization",
-            "value": "Bearer {{apiKey}}"
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
           },
           {
             "key": "Content-Type",
@@ -462,8 +461,8 @@
         "method": "GET",
         "header": [
           {
-            "key": "Authorization",
-            "value": "Bearer {{apiKey}}"
+            "key": "X-API-Key",
+            "value": "{{apiKey}}"
           },
           {
             "key": "Content-Type",
