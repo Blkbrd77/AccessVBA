@@ -1,0 +1,359 @@
+{
+  "info": {
+    "name": "Placker API - POC Validation",
+    "description": "Postman collection to validate the Placker API for the TrelloPOC project.\n\nObjective: Confirm the API is accessible and that card data returned (comments, checklist completion, close date) meets enrichment requirements for Power Automate -> SharePoint automation.\n\nREFERENCE: https://placker.com/docs/api/index.html\n\nSETUP:\n1. Generate your Placker API key from your Placker profile page (Settings > API)\n2. In Postman, set the environment variables below before running\n3. Run the requests in order (1 -> 6)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://placker.com/api/v1",
+      "description": "Placker API base URL - verify against https://placker.com/docs/api/index.html"
+    },
+    {
+      "key": "apiKey",
+      "value": "YOUR_PLACKER_API_KEY_HERE",
+      "description": "Generated from your Placker profile page under Settings > API"
+    },
+    {
+      "key": "boardId",
+      "value": "",
+      "description": "Populate after running Request 2 (List Boards)"
+    },
+    {
+      "key": "listId",
+      "value": "",
+      "description": "Populate after running Request 3 (List Columns/Lists) - use the ID of your 'Done' list"
+    },
+    {
+      "key": "cardId",
+      "value": "",
+      "description": "Populate after running Request 4 (Get Cards in Done List)"
+    }
+  ],
+  "item": [
+    {
+      "name": "1 - Auth Check (Get Current User)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{apiKey}}",
+            "description": "Placker API key authentication"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/me",
+          "host": ["{{baseUrl}}"],
+          "path": ["me"]
+        },
+        "description": "TEST 1: Confirm API key is valid and the API is accessible.\n\nExpected: 200 OK with user account details.\nIf 401: API key is invalid or not set correctly.\nIf 403: Account may not have API access enabled.\n\nNOTE: Verify the exact endpoint path against https://placker.com/docs/api/index.html - it may be /users/me or /profile"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status code is 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test('Response has user data', function () {",
+              "    var jsonData = pm.response.json();",
+              "    pm.expect(jsonData).to.be.an('object');",
+              "    console.log('Authenticated as:', JSON.stringify(jsonData));",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2 - List Boards",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{apiKey}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/boards",
+          "host": ["{{baseUrl}}"],
+          "path": ["boards"]
+        },
+        "description": "TEST 2: Retrieve all boards accessible to the authenticated user.\n\nExpected: 200 OK with array of board objects.\nACTION: Copy the 'id' of your target Trello board and set it as the 'boardId' collection variable."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status code is 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test('Response contains boards array', function () {",
+              "    var jsonData = pm.response.json();",
+              "    pm.expect(jsonData).to.be.an('array');",
+              "    pm.expect(jsonData.length).to.be.greaterThan(0);",
+              "    console.log('Available boards:');",
+              "    jsonData.forEach(function(board) {",
+              "        console.log(' - ID:', board.id, '| Name:', board.name || board.title);",
+              "    });",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3 - Get Lists (Columns) on Board",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{apiKey}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/boards/{{boardId}}/lists",
+          "host": ["{{baseUrl}}"],
+          "path": ["boards", "{{boardId}}", "lists"]
+        },
+        "description": "TEST 3: Get all lists (columns) on the target board.\n\nPREREQUISITE: Set 'boardId' variable from Request 2 output.\nExpected: 200 OK with array of list objects.\nACTION: Find the 'Done' list and copy its 'id' to the 'listId' variable.\n\nNOTE: Endpoint path may vary - check docs for /boards/{id}/columns or /boards/{id}/stages"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status code is 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test('Board lists returned', function () {",
+              "    var jsonData = pm.response.json();",
+              "    pm.expect(jsonData).to.be.an('array');",
+              "    console.log('Lists on board:');",
+              "    jsonData.forEach(function(list) {",
+              "        console.log(' - ID:', list.id, '| Name:', list.name || list.title);",
+              "    });",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4 - Get Cards in Done List",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{apiKey}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/boards/{{boardId}}/cards?listId={{listId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["boards", "{{boardId}}", "cards"],
+          "query": [
+            {
+              "key": "listId",
+              "value": "{{listId}}",
+              "description": "Filter cards to only those in the Done list"
+            },
+            {
+              "key": "includeChecklists",
+              "value": "true",
+              "description": "Request checklist data be included - verify param name in docs",
+              "disabled": false
+            },
+            {
+              "key": "includeComments",
+              "value": "true",
+              "description": "Request comments be included - verify param name in docs",
+              "disabled": false
+            }
+          ]
+        },
+        "description": "TEST 4: Retrieve cards currently in the 'Done' list.\n\nPREREQUISITE: Set 'boardId' and 'listId' variables.\nExpected: 200 OK with array of card objects.\nACTION: Copy a card 'id' to the 'cardId' variable for detailed inspection in Test 5.\n\nKEY CHECK: Inspect the top-level card fields returned. Note which of these are present:\n- id, name/title\n- comments or commentCount\n- checklists or checklistItems\n- closedDate, actualEndDate, completedAt, or dueComplete date\n- status"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status code is 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test('Cards array returned', function () {",
+              "    var jsonData = pm.response.json();",
+              "    var cards = Array.isArray(jsonData) ? jsonData : jsonData.data || jsonData.cards || [];",
+              "    pm.expect(cards.length).to.be.greaterThan(0);",
+              "",
+              "    // Inspect first card to understand data shape",
+              "    var firstCard = cards[0];",
+              "    console.log('=== FIRST CARD FULL RESPONSE ===');",
+              "    console.log(JSON.stringify(firstCard, null, 2));",
+              "",
+              "    // Check for target fields",
+              "    console.log('\\n=== FIELD PRESENCE CHECK ===');",
+              "    console.log('Has comments:', !!firstCard.comments || !!firstCard.commentCount);",
+              "    console.log('Has checklists:', !!firstCard.checklists || !!firstCard.checklistItems);",
+              "    console.log('Has close/complete date:', !!firstCard.closedDate || !!firstCard.actualEndDate || !!firstCard.completedAt || !!firstCard.dueComplete);",
+              "    ",
+              "    // Auto-set cardId for next request",
+              "    if (firstCard && firstCard.id) {",
+              "        pm.collectionVariables.set('cardId', firstCard.id);",
+              "        console.log('\\nAuto-set cardId to:', firstCard.id);",
+              "    }",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "5 - Get Single Card Detail (Enriched)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{apiKey}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/cards/{{cardId}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["cards", "{{cardId}}"]
+        },
+        "description": "TEST 5: Get full detail for a single card to verify enrichment data fields.\n\nPREREQUISITE: Set 'cardId' variable (auto-set by Test 4 if tests ran).\nExpected: 200 OK with complete card object.\n\nPRIMARY VALIDATION - confirm these 3 fields are present and populated:\n1. COMMENTS: Are comments returned as an array? What is the field name?\n2. CHECKLIST COMPLETION: Is checklist item state (complete/incomplete) present?\n3. CLOSE DATE: What field name captures when the card was moved to Done?\n\nThis data must be extractable to write to SharePoint."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Status code is 200', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test('Card detail returned', function () {",
+              "    var card = pm.response.json();",
+              "    console.log('=== FULL CARD DETAIL ===');",
+              "    console.log(JSON.stringify(card, null, 2));",
+              "});",
+              "",
+              "pm.test('REQUIREMENT CHECK: Comments field present', function () {",
+              "    var card = pm.response.json();",
+              "    var hasComments = !!(card.comments || card.commentList || card.commentCount !== undefined);",
+              "    pm.expect(hasComments, 'Comments field not found - check API docs for correct field name').to.be.true;",
+              "    if (card.comments) {",
+              "        console.log('Comments field name: comments, count:', card.comments.length);",
+              "    }",
+              "});",
+              "",
+              "pm.test('REQUIREMENT CHECK: Checklist completion field present', function () {",
+              "    var card = pm.response.json();",
+              "    var hasChecklists = !!(card.checklists || card.checklistItems || card.checkItems);",
+              "    pm.expect(hasChecklists, 'Checklist field not found - check API docs for correct field name').to.be.true;",
+              "    if (card.checklists) {",
+              "        console.log('Checklist field name: checklists, count:', card.checklists.length);",
+              "        if (card.checklists.length > 0 && card.checklists[0].checkItems) {",
+              "            console.log('Checklist items sample:', JSON.stringify(card.checklists[0].checkItems[0]));",
+              "        }",
+              "    }",
+              "});",
+              "",
+              "pm.test('REQUIREMENT CHECK: Close/completion date field present', function () {",
+              "    var card = pm.response.json();",
+              "    var closeDate = card.closedDate || card.actualEndDate || card.completedAt || card.dueComplete || card.closeDate;",
+              "    pm.expect(closeDate, 'Close date field not found - inspect full card response above for the correct field name').to.not.be.undefined;",
+              "    console.log('Close date value:', closeDate);",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "6 - Get Card Comments (Explicit)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{apiKey}}"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/cards/{{cardId}}/comments",
+          "host": ["{{baseUrl}}"],
+          "path": ["cards", "{{cardId}}", "comments"]
+        },
+        "description": "TEST 6: If comments are not embedded in the card detail (Test 5), try a dedicated comments sub-resource endpoint.\n\nPREREQUISITE: 'cardId' variable set.\nExpected: 200 OK with comments array OR 404 if comments are only embedded in card detail.\n\nIf 404: comments are embedded - use the field found in Test 5 response.\nIf 200: document the field structure for the Power Automate flow mapping."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "if (pm.response.code === 200) {",
+              "    pm.test('Comments sub-resource exists', function () {",
+              "        var comments = pm.response.json();",
+              "        console.log('Comments endpoint exists. Response:');",
+              "        console.log(JSON.stringify(comments, null, 2));",
+              "    });",
+              "} else if (pm.response.code === 404) {",
+              "    console.log('INFO: No dedicated comments endpoint - comments are embedded in card detail (Test 5).');",
+              "    console.log('Use the comments field found in the /cards/{id} response.');",
+              "} else {",
+              "    pm.test('Unexpected response code', function () {",
+              "        pm.expect(pm.response.code).to.be.oneOf([200, 404]);",
+              "    });",
+              "}"
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
