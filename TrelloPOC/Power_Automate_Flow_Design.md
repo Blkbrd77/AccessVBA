@@ -6,46 +6,100 @@ Based on your completed requirements. Follow each section in order. Where you se
 
 ## Part 1 — Fix the Trigger
 
-**Problem:** "When a new card is added to a board" fires for new cards, not cards moved to Done.
+**The Trello connector in Power Automate only offers two triggers:**
+- "When a new card is added to a board"
+- "When a new card is added to a list"
 
-**Fix:** Replace it with the **Trello connector** trigger, which has native list-move detection.
+Neither is labelled "moved to list," but **"When a new card is added to a list" is the one to use.** The Trello API fires this event whenever a card arrives in a list — whether it was just created there or moved there from another list. Test it first (see below) to confirm it fires on a move before building the rest of the flow.
 
-> Placker is built on top of Trello boards. The Trello connector in Power Automate sees the same boards. Use Trello for the trigger, then call Placker's API for the enriched data.
+### Option A — Try the Trello Trigger First (Free, simplest)
 
-### Steps
+1. Delete your current trigger.
+2. Click **+ Add a trigger** → search **Trello**.
+3. Select **"When a new card is added to a list"**.
+4. Sign in with your Trello account.
+5. Set:
+   - **Board** → COED Database
+   - **List** → Done
+6. Save the flow, then move an existing test card into Done.
+7. Check **My Flows → Run history** within 2 minutes to see if the flow fired.
 
-1. Open your flow and delete the current trigger.
-2. Click **+ Add a trigger** → search for **Trello**.
-3. Select: **"When a card is moved to a list"**
-4. Sign in with your Trello account (same account that sees the COED Database board).
-5. Set the fields:
-   - **Board** → select **COED Database**
-   - **List** → select **Done**
-6. Save. This trigger now fires only when a card lands in Done.
+> **If it fired on the move** → you're done with the trigger, continue to Part 2.
+>
+> **If it only fires for brand-new cards and not moves** → use Option B below.
 
 ---
 
-## Part 2 — Store the Placker API Key Securely
+### Option B — Scheduled Poll (Fallback, always works)
 
-**Method: Power Platform Environment Variable (most secure, no hardcoding)**
+If the Trello trigger does not fire on card moves, replace the trigger with a scheduled poll of the Placker API.
 
-### Steps
+1. Delete the Trello trigger.
+2. Click **+ Add a trigger** → search **Schedule** → select **"Recurrence"**.
+3. Set the interval to every **15 minutes** (or whatever frequency suits your team).
+4. At the start of the flow, add an **HTTP** action to call:
+   ```
+   GET https://placker.com/api/v1/list/{listId}/card
+   ```
+   where `{listId}` is the Placker ID of your Done list (find this via Postman — call `GET /board/{boardId}/list` to see all lists and their IDs).
+5. Add **Parse JSON** on the response to get the array of cards currently in Done.
+6. Add a **SharePoint → Get items** action to fetch rows from a small tracking list (create a new SharePoint list called `Processed Cards` with one column: `CardId` as a single line of text).
+7. Inside an **Apply to each** on the Placker cards array, add a **Condition**:
+   - Filter the `Processed Cards` list for the current card ID.
+   - **If 0 results** → this card is new to Done → process it (continue to Part 4 steps), then add its ID to `Processed Cards`.
+   - **If 1+ results** → already processed → skip (add a **Terminate** with status Succeeded or just do nothing).
 
-1. Go to **Power Apps** (make.powerapps.com) → left nav → **Solutions**.
-2. Open or create a Solution to hold your flow.
-3. Inside the Solution: **New → Environment Variable**.
+> This approach is 100% reliable regardless of connector limitations. The trade-off is it runs on a schedule rather than instantly — 15-minute lag is acceptable for most archiving workflows.
+
+---
+
+## Part 2 — Store the Placker API Key (POC Workaround — No Admin Required)
+
+> **Context:** The production approach uses Azure Key Vault, which requires admin access to provision. For the POC, use one of the two options below. Both require zero admin privileges. Rotate the key once the POC is approved and Key Vault is available.
+
+---
+
+### Option A — Plain Text Environment Variable (Recommended for POC)
+
+No Key Vault, no admin — just a text value scoped to your Power Platform environment.
+
+1. Go to **Power Apps** (make.powerapps.com) → **Solutions** → open your solution.
+2. Click **New → Environment Variable**.
    - **Display name:** `Placker API Key`
    - **Name:** `placker_api_key`
-   - **Data type:** Secret
+   - **Data type:** Text *(not Secret — Secret requires Key Vault)*
    - **Current value:** paste your Placker API key
-4. Save.
-5. Back in your flow, whenever you need the API key in an HTTP header, use the expression:
-   ```
-   parameters('placker_api_key')
-   ```
-   in the **Value** field of the header row.
+3. Save.
+4. In your flow's HTTP action, add a header:
+   - **Key:** `Authorization` (or whatever header Placker expects — check Part 4)
+   - **Value:** click the expression tab and enter:
+     ```
+     parameters('placker_api_key')
+     ```
 
-> **Why this is the most secure option:** The value is encrypted at rest, not visible in the flow definition, and can be rotated without editing the flow.
+**Why this is good enough for a POC:**
+- The key is not hardcoded inside the flow definition
+- Changing or rotating the key only requires editing the Environment Variable — no touching the flow
+- When Key Vault access is granted, you swap Data Type to Secret and re-enter the value; the flow expression stays identical
+
+---
+
+### Option B — Hardcode Directly in the Flow (Fastest, least effort)
+
+Use this only if you want to prove the API call works before worrying about anything else.
+
+1. In your HTTP action header value, paste the API key directly as a plain string.
+2. Add a comment (description field on the action): `TODO: move to Environment Variable before production`.
+
+**Limitation:** The key is visible to anyone who can view the flow definition. Acceptable only for a short-lived POC on a non-production board.
+
+---
+
+### When You Get Key Vault Access Later
+
+1. Edit the Environment Variable → change **Data type** to **Secret**.
+2. Re-enter the API key value (it will now be stored in Key Vault).
+3. The flow expression `parameters('placker_api_key')` does not need to change.
 
 ---
 
