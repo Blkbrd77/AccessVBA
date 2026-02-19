@@ -7,8 +7,8 @@
   "variable": [
     {
       "key": "baseUrl",
-      "value": "https://placker.com/api/v1",
-      "description": "Verify the exact base URL from https://placker.com/docs/api/index.html (servers section)"
+      "value": "https://placker.com",
+      "description": "Confirmed base URL from Placker API curl example. No /api/v1 prefix."
     },
     {
       "key": "apiKey",
@@ -57,7 +57,7 @@
           "host": ["{{baseUrl}}"],
           "path": ["me", "notifications"]
         },
-        "description": "TEST 1: Confirm the API key is valid and the base URL is correct.\n\nEndpoint: GET /me/notifications (from openapi.yaml)\nAuth: X-API-Key header (confirmed from Placker API docs)\n\nExpected: 200 OK\nIf 401: API key is wrong or missing\nIf 404: base URL may be wrong - check servers section at https://placker.com/docs/api/index.html"
+        "description": "TEST 1: Confirm the API key is valid and the base URL is correct.\n\nEndpoint: GET /me/notifications (from openapi.yaml)\nAuth: X-API-Key header (confirmed from Placker API docs)\n\nExpected: 200 OK\nIf 401: API key is wrong or missing\nIf 404: base URL is wrong - confirmed correct URL is https://placker.com (no /api/v1 prefix)"
       },
       "event": [
         {
