@@ -53,27 +53,53 @@ If the Trello trigger does not fire on card moves, replace the trigger with a sc
 
 ---
 
-## Part 2 — Store the Placker API Key Securely
+## Part 2 — Store the Placker API Key (POC Workaround — No Admin Required)
 
-**Method: Power Platform Environment Variable (most secure, no hardcoding)**
+> **Context:** The production approach uses Azure Key Vault, which requires admin access to provision. For the POC, use one of the two options below. Both require zero admin privileges. Rotate the key once the POC is approved and Key Vault is available.
 
-### Steps
+---
 
-1. Go to **Power Apps** (make.powerapps.com) → left nav → **Solutions**.
-2. Open or create a Solution to hold your flow.
-3. Inside the Solution: **New → Environment Variable**.
+### Option A — Plain Text Environment Variable (Recommended for POC)
+
+No Key Vault, no admin — just a text value scoped to your Power Platform environment.
+
+1. Go to **Power Apps** (make.powerapps.com) → **Solutions** → open your solution.
+2. Click **New → Environment Variable**.
    - **Display name:** `Placker API Key`
    - **Name:** `placker_api_key`
-   - **Data type:** Secret
+   - **Data type:** Text *(not Secret — Secret requires Key Vault)*
    - **Current value:** paste your Placker API key
-4. Save.
-5. Back in your flow, whenever you need the API key in an HTTP header, use the expression:
-   ```
-   parameters('placker_api_key')
-   ```
-   in the **Value** field of the header row.
+3. Save.
+4. In your flow's HTTP action, add a header:
+   - **Key:** `Authorization` (or whatever header Placker expects — check Part 4)
+   - **Value:** click the expression tab and enter:
+     ```
+     parameters('placker_api_key')
+     ```
 
-> **Why this is the most secure option:** The value is encrypted at rest, not visible in the flow definition, and can be rotated without editing the flow.
+**Why this is good enough for a POC:**
+- The key is not hardcoded inside the flow definition
+- Changing or rotating the key only requires editing the Environment Variable — no touching the flow
+- When Key Vault access is granted, you swap Data Type to Secret and re-enter the value; the flow expression stays identical
+
+---
+
+### Option B — Hardcode Directly in the Flow (Fastest, least effort)
+
+Use this only if you want to prove the API call works before worrying about anything else.
+
+1. In your HTTP action header value, paste the API key directly as a plain string.
+2. Add a comment (description field on the action): `TODO: move to Environment Variable before production`.
+
+**Limitation:** The key is visible to anyone who can view the flow definition. Acceptable only for a short-lived POC on a non-production board.
+
+---
+
+### When You Get Key Vault Access Later
+
+1. Edit the Environment Variable → change **Data type** to **Secret**.
+2. Re-enter the API key value (it will now be stored in Key Vault).
+3. The flow expression `parameters('placker_api_key')` does not need to change.
 
 ---
 
